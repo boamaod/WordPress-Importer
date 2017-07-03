@@ -64,7 +64,7 @@ The current major items are currently missing or suboptimal in the Importer:
 
 The best way to help with the importer right now is to **try importing and see what breaks**. Compare the old importer to the new one, and find any inconsistent behaviour.
 
-We have a [general feedback thread](https://github.com/humanmade/WordPress-Importer/issues/7) so you can let us know how it goes. If the importer works perfectly, let us know. If something doesn't import the way you think it should, you can file a new issue, or leave a comment to check whether it's intentional first. :)
+We have a [general feedback thread](issues/1) so you can let us know how it goes. If the importer works perfectly, let us know. If something doesn't import the way you think it should, you can file a new issue, or leave a comment to check whether it's intentional first. :)
 
 ## License
 
