@@ -4,7 +4,7 @@ class WXR_Importer extends WP_Importer {
 	/**
 	 * Maximum supported WXR version
 	 */
-	const MAX_WXR_VERSION = 1.2;
+	const MAX_WXR_VERSION = 1.3;
 
 	/**
 	 * Regular expression for checking if a post references an attachment
@@ -26,14 +26,27 @@ class WXR_Importer extends WP_Importer {
 		)!ix';
 
 	/**
+	 * The WXR namespaceURI
+	 *
+	 * Note that this is version agnositic
+	 */
+	const WXR_NAMESPACE_URI = 'http://wordpress.org/export/';
+
+	/**
+	 * The Dublin Core namespaceURI
+	 */
+	const DUBLIN_CORE_NAMESPACE_URI = 'http://purl.org/dc/elements/1.1/';
+
+	/**
+	 * The RSS content module namspaceURI
+	 */
+	const RSS_CONTENT_NAMESPACE_URI = 'http://purl.org/rss/1.0/modules/content/';
+
+	/**
 	 * Version of WXR we're importing.
-	 *
-	 * Defaults to 1.0 for compatibility. Typically overridden by a
-	 * `<wp:wxr_version>` tag at the start of the file.
-	 *
 	 * @var string
 	 */
-	protected $version = '1.0';
+	protected $version;
 
 	// information to import from WXR file
 	protected $categories = array();
@@ -145,171 +158,108 @@ class WXR_Importer extends WP_Importer {
 			return $reader;
 		}
 
-		// Set the version to compatibility mode first
-		$this->version = '1.0';
-
 		// Start parsing!
 		$data = new WXR_Import_Info();
+
 		while ( $reader->read() ) {
 			// Only deal with element opens
 			if ( $reader->nodeType !== XMLReader::ELEMENT ) {
 				continue;
 			}
 
-			switch ( $reader->name ) {
-				case 'wp:wxr_version':
-					// Upgrade to the correct version
-					$this->version = $reader->readString();
+			// note: possible bug in XMLReader: empty( $reader->namespaceURI ) always returns false
+			// so we have to explicitly compare against the empty string
+			if ( '' === $reader->namespaceURI ) {
+				// handle elements in the empty namespace, i.e., standard RSS elements
+				switch ( $reader->localName ) {
+					case 'rss':
+						$this->version = $reader->getAttributeNs( 'version', self::WXR_NAMESPACE_URI );
 
-					if ( version_compare( $this->version, self::MAX_WXR_VERSION, '>' ) ) {
-						$this->logger->warning( sprintf(
-							__( 'This WXR file (version %s) is newer than the importer (version %s) and may not be supported. Please consider updating.', 'wordpress-importer' ),
-							$this->version,
-							self::MAX_WXR_VERSION
-						) );
-					}
+						if ( empty( $this->version ) ) {
+							return new WP_Error( 'wxr_importer.unknown_version',
+								__( 'This does not appear to be a WXR file, missing WXR version number.', 'wordpress-importer' ) );
+						}
+						elseif ( version_compare( $this->version, self::MAX_WXR_VERSION, '>' ) ) {
+							$this->logger->warning( sprintf(
+								__( 'This WXR file (version %s) is newer than the importer (version %s) and may not be supported. Please consider updating.', 'wordpress-importer' ),
+								$this->version,
+								self::MAX_WXR_VERSION
+							) );
+						}
 
-					// Handled everything in this node, move on to the next
-					$reader->next();
-					break;
+						break;
 
-				case 'generator':
-					$data->generator = $reader->readString();
-					$reader->next();
-					break;
+					case 'item':
+						$node = $reader->expand();
+						$parsed = $this->parse_post_node( $node );
+						if ( is_wp_error( $parsed ) ) {
+							$this->log_error( $parsed );
 
-				case 'title':
-					$data->title = $reader->readString();
-					$reader->next();
-					break;
+							// Skip the rest of this post
+							$reader->next();
+							break;
+						}
 
-				case 'wp:base_site_url':
-					$data->siteurl = $reader->readString();
-					$reader->next();
-					break;
+						if ( $parsed['data']['post_type'] === 'attachment' ) {
+							$data->media_count++;
+						} else {
+							$data->post_count++;
+						}
+						$data->comment_count += count( $parsed['comments'] );
 
-				case 'wp:base_blog_url':
-					$data->home = $reader->readString();
-					$reader->next();
-					break;
-
-				case 'wp:author':
-					$node = $reader->expand();
-
-					$parsed = $this->parse_author_node( $node );
-					if ( is_wp_error( $parsed ) ) {
-						$this->log_error( $parsed );
-
-						// Skip the rest of this post
+						// Handled everything in this node, move on to the next
 						$reader->next();
 						break;
-					}
 
-					$data->users[] = $parsed;
-
-					// Handled everything in this node, move on to the next
-					$reader->next();
-					break;
-
-				case 'item':
-					$node = $reader->expand();
-					$parsed = $this->parse_post_node( $node );
-					if ( is_wp_error( $parsed ) ) {
-						$this->log_error( $parsed );
-
-						// Skip the rest of this post
+					case 'generator':
+						$data->generator = $reader->readString();
 						$reader->next();
 						break;
-					}
 
-					if ( $parsed['data']['post_type'] === 'attachment' ) {
-						$data->media_count++;
-					} else {
-						$data->post_count++;
-					}
-					$data->comment_count += count( $parsed['comments'] );
+					case 'title':
+						$data->title = $reader->readString();
+						$reader->next();
+						break;
+				}
+			}
+			elseif ( self::WXR_NAMESPACE_URI === $reader->namespaceURI ) {
+				switch ( $reader->localName ) {
+					case 'base_site_url':
+						$data->siteurl = $reader->readString();
+						$reader->next();
+						break;
 
-					// Handled everything in this node, move on to the next
-					$reader->next();
-					break;
+					case 'user':
+						$node = $reader->expand();
 
-				case 'wp:category':
-				case 'wp:tag':
-				case 'wp:term':
-					$data->term_count++;
+						$parsed = $this->parse_user_node( $node );
+						if ( is_wp_error( $parsed ) ) {
+							$this->log_error( $parsed );
 
-					// Handled everything in this node, move on to the next
-					$reader->next();
-					break;
+							// Skip the rest of this post
+							$reader->next();
+							break;
+						}
+
+						$data->users[] = $parsed;
+
+						// Handled everything in this node, move on to the next
+						$reader->next();
+						break;
+
+					case 'term':
+						$data->term_count++;
+
+						// Handled everything in this node, move on to the next
+						$reader->next();
+						break;
+				}
 			}
 		}
 
 		$data->version = $this->version;
 
 		return $data;
-	}
-
-	/**
-	 * The main controller for the actual import stage.
-	 *
-	 * @param string $file Path to the WXR file for importing
-	 */
-	public function parse_authors( $file ) {
-		// Let's run the actual importer now, woot
-		$reader = $this->get_reader( $file );
-		if ( is_wp_error( $reader ) ) {
-			return $reader;
-		}
-
-		// Set the version to compatibility mode first
-		$this->version = '1.0';
-
-		// Start parsing!
-		$authors = array();
-		while ( $reader->read() ) {
-			// Only deal with element opens
-			if ( $reader->nodeType !== XMLReader::ELEMENT ) {
-				continue;
-			}
-
-			switch ( $reader->name ) {
-				case 'wp:wxr_version':
-					// Upgrade to the correct version
-					$this->version = $reader->readString();
-
-					if ( version_compare( $this->version, self::MAX_WXR_VERSION, '>' ) ) {
-						$this->logger->warning( sprintf(
-							__( 'This WXR file (version %s) is newer than the importer (version %s) and may not be supported. Please consider updating.', 'wordpress-importer' ),
-							$this->version,
-							self::MAX_WXR_VERSION
-						) );
-					}
-
-					// Handled everything in this node, move on to the next
-					$reader->next();
-					break;
-
-				case 'wp:author':
-					$node = $reader->expand();
-
-					$parsed = $this->parse_author_node( $node );
-					if ( is_wp_error( $parsed ) ) {
-						$this->log_error( $parsed );
-
-						// Skip the rest of this post
-						$reader->next();
-						break;
-					}
-
-					$authors[] = $parsed;
-
-					// Handled everything in this node, move on to the next
-					$reader->next();
-					break;
-			}
-		}
-
-		return $authors;
 	}
 
 	/**
@@ -332,9 +282,6 @@ class WXR_Importer extends WP_Importer {
 			return $reader;
 		}
 
-		// Set the version to compatibility mode first
-		$this->version = '1.0';
-
 		// Reset other variables
 		$this->base_url = '';
 
@@ -345,125 +292,102 @@ class WXR_Importer extends WP_Importer {
 				continue;
 			}
 
-			switch ( $reader->name ) {
-				case 'wp:wxr_version':
-					// Upgrade to the correct version
-					$this->version = $reader->readString();
+			// note: possible bug in XMLReader: empty( $reader->namespaceURI ) always returns false
+			// so we have to explicitly compare against the empty string
+			if ( '' ===  $reader->namespaceURI ) {
+				// handle elements in the empty namespace, i.e., standard RSS elements
+				switch ( $reader->localName ) {
+					case 'rss':
+						$this->version = $reader->getAttributeNs( 'version', self::WXR_NAMESPACE_URI );
 
-					if ( version_compare( $this->version, self::MAX_WXR_VERSION, '>' ) ) {
-						$this->logger->warning( sprintf(
-							__( 'This WXR file (version %s) is newer than the importer (version %s) and may not be supported. Please consider updating.', 'wordpress-importer' ),
-							$this->version,
-							self::MAX_WXR_VERSION
-						) );
-					}
+						if ( empty( $this->version ) ) {
+							return new WP_Error( 'wxr_importer.unknown_version',
+								__( 'This does not appear to be a WXR file, missing WXR version number.', 'wordpress-importer' ) );
+						}
+						elseif ( version_compare( $this->version, self::MAX_WXR_VERSION, '>' ) ) {
+							$this->logger->warning( sprintf(
+								__( 'This WXR file (version %s) is newer than the importer (version %s) and may not be supported. Please consider updating.', 'wordpress-importer' ),
+								$this->version,
+								self::MAX_WXR_VERSION
+							) );
+						}
 
-					// Handled everything in this node, move on to the next
-					$reader->next();
-					break;
+						break;
 
-				case 'wp:base_site_url':
-					$this->base_url = $reader->readString();
+					case 'item':
+						$node = $reader->expand();
+						$parsed = $this->parse_post_node( $node );
+						if ( is_wp_error( $parsed ) ) {
+							$this->log_error( $parsed );
 
-					// Handled everything in this node, move on to the next
-					$reader->next();
-					break;
+							// Skip the rest of this post
+							$reader->next();
+							break;
+						}
 
-				case 'item':
-					$node = $reader->expand();
-					$parsed = $this->parse_post_node( $node );
-					if ( is_wp_error( $parsed ) ) {
-						$this->log_error( $parsed );
+						$this->process_post( $parsed['data'], $parsed['meta'], $parsed['comments'], $parsed['terms'] );
 
-						// Skip the rest of this post
+						// Handled everything in this node, move on to the next
 						$reader->next();
 						break;
-					}
 
-					$this->process_post( $parsed['data'], $parsed['meta'], $parsed['comments'], $parsed['terms'] );
+					default:
+						// Skip this node, probably handled by something already
+						break;
+				}
+			}
+			elseif ( self::WXR_NAMESPACE_URI === $reader->namespaceURI ) {
+				switch ( $reader->localName ) {
+					case 'site_url':
+						$this->base_url = $reader->readString();
 
-					// Handled everything in this node, move on to the next
-					$reader->next();
-					break;
-
-				case 'wp:author':
-					$node = $reader->expand();
-
-					$parsed = $this->parse_author_node( $node );
-					if ( is_wp_error( $parsed ) ) {
-						$this->log_error( $parsed );
-
-						// Skip the rest of this post
+						// Handled everything in this node, move on to the next
 						$reader->next();
 						break;
-					}
 
-					$status = $this->process_author( $parsed['data'], $parsed['meta'] );
-					if ( is_wp_error( $status ) ) {
-						$this->log_error( $status );
-					}
+					case 'user':
+						$node = $reader->expand();
 
-					// Handled everything in this node, move on to the next
-					$reader->next();
-					break;
+						$parsed = $this->parse_user_node( $node );
+						if ( is_wp_error( $parsed ) ) {
+							$this->log_error( $parsed );
 
-				case 'wp:category':
-					$node = $reader->expand();
+							// Skip the rest of this post
+							$reader->next();
+							break;
+						}
 
-					$parsed = $this->parse_term_node( $node, 'category' );
-					if ( is_wp_error( $parsed ) ) {
-						$this->log_error( $parsed );
+						$status = $this->process_user( $parsed['data'], $parsed['meta'] );
+						if ( is_wp_error( $status ) ) {
+							$this->log_error( $status );
+						}
 
-						// Skip the rest of this post
+						// Handled everything in this node, move on to the next
 						$reader->next();
 						break;
-					}
 
-					$status = $this->process_term( $parsed['data'], $parsed['meta'] );
+					case 'term':
+						$node = $reader->expand();
 
-					// Handled everything in this node, move on to the next
-					$reader->next();
-					break;
+						$parsed = $this->parse_term_node( $node );
+						if ( is_wp_error( $parsed ) ) {
+							$this->log_error( $parsed );
 
-				case 'wp:tag':
-					$node = $reader->expand();
+							// Skip the rest of this post
+							$reader->next();
+							break;
+						}
 
-					$parsed = $this->parse_term_node( $node, 'tag' );
-					if ( is_wp_error( $parsed ) ) {
-						$this->log_error( $parsed );
+						$status = $this->process_term( $parsed['data'], $parsed['meta'] );
 
-						// Skip the rest of this post
+						// Handled everything in this node, move on to the next
 						$reader->next();
 						break;
-					}
 
-					$status = $this->process_term( $parsed['data'], $parsed['meta'] );
-
-					// Handled everything in this node, move on to the next
-					$reader->next();
-					break;
-
-				case 'wp:term':
-					$node = $reader->expand();
-
-					$parsed = $this->parse_term_node( $node );
-					if ( is_wp_error( $parsed ) ) {
-						$this->log_error( $parsed );
-
-						// Skip the rest of this post
-						$reader->next();
+					default:
+						// Skip this node, probably handled by something already
 						break;
-					}
-
-					$status = $this->process_term( $parsed['data'], $parsed['meta'] );
-
-					// Handled everything in this node, move on to the next
-					$reader->next();
-					break;
-
-				default:
-					// Skip this node, probably handled by something already
-					break;
+				}
 			}
 		}
 
@@ -477,6 +401,350 @@ class WXR_Importer extends WP_Importer {
 		// $this->remap_featured_images();
 
 		$this->import_end();
+	}
+
+	protected function parse_category_node( $node ) {
+		$data = array(
+			// Default taxonomy to "category", since this is a `<category>` tag
+			'taxonomy' => 'category',
+		);
+		$meta = array();
+
+		if ( $node->hasAttribute( 'domain' ) ) {
+			$data['taxonomy'] = $node->getAttribute( 'domain' );
+		}
+		if ( $node->hasAttributeNS( self::WXR_NAMESPACE_URI, 'slug' ) ) {
+			$data['slug'] = $node->getAttributeNS( self::WXR_NAMESPACE_URI, 'slug' );
+		}
+
+		$data['name'] = $node->textContent;
+
+		if ( empty( $data['slug'] ) ) {
+			return null;
+		}
+
+		// Just for extra compatibility
+		if ( $data['taxonomy'] === 'tag' ) {
+			$data['taxonomy'] = 'post_tag';
+		}
+
+		return $data;
+	}
+
+	/**
+	 * Parse a comment node into comment data.
+	 *
+	 * @param DOMElement $node Parent node of comment data (typically `wp:comment`).
+	 * @return array Comment data array.
+	 */
+	protected function parse_comment_node( $node ) {
+		$data = array(
+			'commentmeta' => array(),
+		);
+
+		foreach ( $node->childNodes as $child ) {
+			// We only care about child elements
+			if ( $child->nodeType !== XML_ELEMENT_NODE ) {
+				continue;
+			}
+
+			if ( self::WXR_NAMESPACE_URI !== $child->namespaceURI ) {
+				continue;
+			}
+
+			switch ( $child->localName ) {
+				case 'id':
+				case 'author':
+				case 'author_email':
+				case 'author_IP':
+				case 'author_url':
+				case 'user_id':
+				case 'date':
+				case 'date_gmt':
+				case 'content':
+				case 'approved':
+				case 'type':
+				case 'parent':
+					$data[$child->localName] = $child->textContent;
+					break;
+
+				case 'meta':
+					$meta_item = $this->parse_meta_node( $child );
+					if ( ! empty( $meta_item ) ) {
+						$data['meta'][] = $meta_item;
+					}
+					break;
+			}
+		}
+
+		// remap from XML element names to what $this->process_comments() expects
+		$allowed = array(
+			'id'            => 'comment_id',
+			'author'        => 'comment_author',
+			'author_email'  => 'comment_author_email',
+			'author_IP'     => 'comment_author_IP',
+			'author_url'    => 'comment_author_url',
+			'user_id'       => 'comment_user_id',
+			'date'          => 'comment_date',
+			'date_gmt'      => 'comment_date_gmt',
+			'content'       => 'comment_content',
+			'approved'      => 'comment_approved',
+			'type'          => 'comment_type',
+			'parent'        => 'comment_parent',
+		);
+		$data = $this->remap_xml_keys( $data, $allowed );
+
+		return $data;
+	}
+
+	/**
+	 * Parse a meta node into meta data.
+	 *
+	 * @param DOMElement $node Parent node of meta data (typically `wp:postmeta` or `wp:commentmeta`).
+	 * @return array|null Meta data array on success, or null on error.
+	 */
+	protected function parse_meta_node( $node ) {
+		foreach ( $node->childNodes as $child ) {
+			// We only care about child elements
+			if ( $child->nodeType !== XML_ELEMENT_NODE ) {
+				continue;
+			}
+
+			if ( self::WXR_NAMESPACE_URI !== $child->namespaceURI ) {
+				continue;
+			}
+
+			switch ( $child->localName ) {
+				case 'key':
+					$key = $child->textContent;
+					break;
+
+				case 'value':
+					$value = $child->textContent;
+					break;
+			}
+		}
+
+		if ( empty( $key ) || empty( $value ) ) {
+			return null;
+		}
+
+		return compact( 'key', 'value' );
+	}
+
+	/**
+	 * Parse a post node into post data.
+	 *
+	 * @param DOMElement $node Parent node of post data (typically `item`).
+	 * @return array|WP_Error Post data array on success, error otherwise.
+	 */
+	protected function parse_post_node( $node ) {
+		$data = array();
+		$meta = array();
+		$comments = array();
+		$terms = array();
+
+		foreach ( $node->childNodes as $child ) {
+			// We only care about child elements
+			if ( $child->nodeType !== XML_ELEMENT_NODE ) {
+				continue;
+			}
+
+			// note: in the DOM the empty namespace is represented as null,
+			// unlike in XMLReader, which represents it as '', so the tests below
+			// to find standard RSS elements are different than those in get_preliminary_information()
+			// and import()
+
+			// skip element if it's namespaceURI is not one we care about
+			if ( ! ( is_null( $child->namespaceURI ) || self::WXR_NAMESPACE_URI === $child->namespaceURI ||
+					in_array( $child->namespaceURI,
+						array( self::DUBLIN_CORE_NAMESPACE_URI, self::RSS_CONTENT_NAMESPACE_URI ) ) ) ) {
+				continue;
+			}
+
+			if ( self::WXR_NAMESPACE_URI === $child->namespaceURI ) {
+				switch ( $child->localName ) {
+					case 'type':
+					case 'id':
+					case 'date':
+					case 'date_gmt':
+					case 'comment_status':
+					case 'ping_status':
+					case 'name':
+					case 'status':
+					case 'parent':
+					case 'menu_order':
+					case 'password':
+					case 'is_sticky':
+					case 'attachment_url':
+						if ( 'status' === $child->localName && 'auto-draft' === $child->textContent ) {
+							// Bail now
+							return new WP_Error(
+								'wxr_importer.post.cannot_import_draft',
+								__( 'Cannot import auto-draft posts' ),
+								$data
+							);
+						}
+
+						$data[$child->localName] = $child->textContent;
+						break;
+
+					case 'meta':
+						$meta_item = $this->parse_meta_node( $child );
+						if ( ! empty( $meta_item ) ) {
+							$meta[] = $meta_item;
+						}
+						break;
+
+					case 'comment':
+						$comment_item = $this->parse_comment_node( $child );
+						if ( ! empty( $comment_item ) ) {
+							$comments[] = $comment_item;
+						}
+						break;
+				}
+			}
+			elseif ( self::DUBLIN_CORE_NAMESPACE_URI === $child->namespaceURI ) {
+				switch ( $child->localName ) {
+					case 'creator':
+						$data["dc:{$child->localName}"] = $child->textContent;
+						break;
+				}
+			}
+			elseif ( self::RSS_CONTENT_NAMESPACE_URI === $child->namespaceURI ) {
+				switch ( $child->localName ) {
+					case 'encoded':
+						$data["content:{$child->localName}"] = $child->textContent;
+						break;
+				}
+			}
+			else {
+				// handle elements in the empty namespace, i.e., standard RSS elements
+				switch ( $child->localName ) {
+					case 'title':
+					case 'guid':
+					case 'description':
+						$data[$child->localName] = $child->textContent;
+						break;
+
+					case 'category':
+						$term_item = $this->parse_category_node( $child );
+						if ( ! empty( $term_item ) ) {
+							$terms[] = $term_item;
+						}
+						break;
+				}
+			}
+		}
+
+		// remap from XML element names to what $this->process_post() expects
+		$allowed = array(
+			'type' => 'post_type',
+			'id' => 'post_id',
+			'title' => 'post_title',
+			'date' => 'post_date',
+			'date_gmt' => 'post_date_gmt',
+			'name' => 'post_name',
+			'status' => 'post_status',
+			'parent' => 'post_parent',
+			'password' => 'post_password',
+			'description' => 'post_excerpt',
+			'content:encoded' => 'post_content',
+			'dc:creator' => 'post_author',
+			'guid' => true,
+			'comment_status' => true,
+			'ping_status' => true,
+			'menu_order' => true,
+			'is_sticky' => true,
+			'attachment_url' => true,
+		);
+		$data = $this->remap_xml_keys( $data, $allowed );
+
+		return compact( 'data', 'meta', 'comments', 'terms' );
+	}
+
+	protected function parse_term_node( $node, $type = 'term' ) {
+		$data = array();
+		$meta = array();
+
+		foreach ( $node->childNodes as $child ) {
+			// We only care about child elements
+			if ( $child->nodeType !== XML_ELEMENT_NODE ) {
+				continue;
+			}
+
+			if ( self::WXR_NAMESPACE_URI !== $child->namespaceURI ) {
+				continue;
+			}
+
+			switch ( $child->localName ) {
+				case 'id':
+				case 'slug':
+				case 'name':
+				case 'parent':
+				case 'description':
+				case 'taxonomy':
+					$data[ $child->localName ] = $child->textContent;
+					break;
+
+				case 'meta':
+					$meta_item = $this->parse_meta_node( $child );
+					if ( ! empty( $meta_item ) ) {
+						$meta[] = $meta_item;
+					}
+			}
+		}
+
+		if ( empty( $data['taxonomy'] ) ) {
+			return null;
+		}
+
+		// Compatibility with WXR 1.0
+		if ( $data['taxonomy'] === 'tag' ) {
+			$data['taxonomy'] = 'post_tag';
+		}
+
+		return compact( 'data', 'meta' );
+	}
+
+	protected function parse_user_node( $node ) {
+		$data = array();
+		$meta = array();
+
+		foreach ( $node->childNodes as $child ) {
+			// We only care about child elements
+			if ( $child->nodeType !== XML_ELEMENT_NODE ) {
+				continue;
+			}
+
+			if ( self::WXR_NAMESPACE_URI !== $child->namespaceURI ) {
+				continue;
+			}
+
+			switch ( $child->localName ) {
+				case 'login':
+				case 'id':
+				case 'email':
+				case 'display_name':
+				case 'first_name':
+				case 'last_name':
+					$data[ $child->localName ] = $child->textContent;
+					break;
+			}
+		}
+
+		// remap from XML element names to what $this->process_user() expects
+		$allowed = array(
+			'id' => 'ID',
+			'login' => 'user_login',
+			'email' => 'user_email',
+			'display_name' => true,
+			'first_name' => true,
+			'last_name' => true,
+		);
+		$data = $this->remap_xml_keys( $data, $allowed );
+
+		return compact( 'data', 'meta' );
 	}
 
 	/**
@@ -519,6 +787,19 @@ class WXR_Importer extends WP_Importer {
 		if ( $this->options['prefill_existing_terms'] ) {
 			$this->prefill_existing_terms();
 		}
+
+		// @todo this is redundant if we are run from within the admin UI
+		// but necessary when run from WP-CLI or phpunit.  Figure out a single place
+		// where we can do the transform no matter how we are run
+		// possibly transform WXR 1.0, 1.1 and 1.2 instances into WXR 1.3 instances
+		require_once __DIR__ . '/class-wxr-transform.php';
+		$transform_wxr = new Transform_WXR();
+		if ( is_wp_error( $transform_wxr ) ) {
+			$this->log_error( __( 'Could not create WXR transformer.', 'wordpress-importer' ) );
+
+			return ( $transform_wxr );
+		}
+		$transform_wxr->transform( $file );
 
 		/**
 		 * Begin the import.
@@ -586,431 +867,6 @@ class WXR_Importer extends WP_Importer {
 		foreach ( $overrides as $original => $renamed ) {
 			$this->user_slug_override[ $original ] = $renamed;
 		}
-	}
-
-	/**
-	 * Parse a post node into post data.
-	 *
-	 * @param DOMElement $node Parent node of post data (typically `item`).
-	 * @return array|WP_Error Post data array on success, error otherwise.
-	 */
-	protected function parse_post_node( $node ) {
-		$data = array();
-		$meta = array();
-		$comments = array();
-		$terms = array();
-
-		foreach ( $node->childNodes as $child ) {
-			// We only care about child elements
-			if ( $child->nodeType !== XML_ELEMENT_NODE ) {
-				continue;
-			}
-
-			switch ( $child->tagName ) {
-				case 'wp:post_type':
-					$data['post_type'] = $child->textContent;
-					break;
-
-				case 'title':
-					$data['post_title'] = $child->textContent;
-					break;
-
-				case 'guid':
-					$data['guid'] = $child->textContent;
-					break;
-
-				case 'dc:creator':
-					$data['post_author'] = $child->textContent;
-					break;
-
-				case 'content:encoded':
-					$data['post_content'] = $child->textContent;
-					break;
-
-				case 'excerpt:encoded':
-					$data['post_excerpt'] = $child->textContent;
-					break;
-
-				case 'wp:post_id':
-					$data['post_id'] = $child->textContent;
-					break;
-
-				case 'wp:post_date':
-					$data['post_date'] = $child->textContent;
-					break;
-
-				case 'wp:post_date_gmt':
-					$data['post_date_gmt'] = $child->textContent;
-					break;
-
-				case 'wp:comment_status':
-					$data['comment_status'] = $child->textContent;
-					break;
-
-				case 'wp:ping_status':
-					$data['ping_status'] = $child->textContent;
-					break;
-
-				case 'wp:post_name':
-					$data['post_name'] = $child->textContent;
-					break;
-
-				case 'wp:status':
-					$data['post_status'] = $child->textContent;
-
-					if ( $data['post_status'] === 'auto-draft' ) {
-						// Bail now
-						return new WP_Error(
-							'wxr_importer.post.cannot_import_draft',
-							__( 'Cannot import auto-draft posts' ),
-							$data
-						);
-					}
-					break;
-
-				case 'wp:post_parent':
-					$data['post_parent'] = $child->textContent;
-					break;
-
-				case 'wp:menu_order':
-					$data['menu_order'] = $child->textContent;
-					break;
-
-				case 'wp:post_password':
-					$data['post_password'] = $child->textContent;
-					break;
-
-				case 'wp:is_sticky':
-					$data['is_sticky'] = $child->textContent;
-					break;
-
-				case 'wp:attachment_url':
-					$data['attachment_url'] = $child->textContent;
-					break;
-
-				case 'wp:postmeta':
-					$meta_item = $this->parse_meta_node( $child );
-					if ( ! empty( $meta_item ) ) {
-						$meta[] = $meta_item;
-					}
-					break;
-
-				case 'wp:comment':
-					$comment_item = $this->parse_comment_node( $child );
-					if ( ! empty( $comment_item ) ) {
-						$comments[] = $comment_item;
-					}
-					break;
-
-				case 'category':
-					$term_item = $this->parse_category_node( $child );
-					if ( ! empty( $term_item ) ) {
-						$terms[] = $term_item;
-					}
-					break;
-			}
-		}
-
-		return compact( 'data', 'meta', 'comments', 'terms' );
-	}
-
-	/**
-	 * Create new posts based on import information
-	 *
-	 * Posts marked as having a parent which doesn't exist will become top level items.
-	 * Doesn't create a new post if: the post type doesn't exist, the given post ID
-	 * is already noted as imported or a post with the same title and date already exists.
-	 * Note that new/updated terms, comments and meta are imported for the last of the above.
-	 */
-	protected function process_post( $data, $meta, $comments, $terms ) {
-		/**
-		 * Pre-process post data.
-		 *
-		 * @param array $data Post data. (Return empty to skip.)
-		 * @param array $meta Meta data.
-		 * @param array $comments Comments on the post.
-		 * @param array $terms Terms on the post.
-		 */
-		$data = apply_filters( 'wxr_importer.pre_process.post', $data, $meta, $comments, $terms );
-		if ( empty( $data ) ) {
-			return false;
-		}
-
-		$original_id = isset( $data['post_id'] )     ? (int) $data['post_id']     : 0;
-		$parent_id   = isset( $data['post_parent'] ) ? (int) $data['post_parent'] : 0;
-		$author_id   = isset( $data['post_author'] ) ? (int) $data['post_author'] : 0;
-
-		// Have we already processed this?
-		if ( isset( $this->mapping['post'][ $original_id ] ) ) {
-			return;
-		}
-
-		$post_type_object = get_post_type_object( $data['post_type'] );
-
-		// Is this type even valid?
-		if ( ! $post_type_object ) {
-			$this->logger->warning( sprintf(
-				__( 'Failed to import "%s": Invalid post type %s', 'wordpress-importer' ),
-				$data['post_title'],
-				$data['post_type']
-			) );
-			return false;
-		}
-
-		$post_exists = $this->post_exists( $data );
-		if ( $post_exists ) {
-			$this->logger->info( sprintf(
-				__( '%s "%s" already exists.', 'wordpress-importer' ),
-				$post_type_object->labels->singular_name,
-				$data['post_title']
-			) );
-
-			/**
-			 * Post processing already imported.
-			 *
-			 * @param array $data Raw data imported for the post.
-			 */
-			do_action( 'wxr_importer.process_already_imported.post', $data );
-
-			// Even though this post already exists, new comments might need importing
-			$this->process_comments( $comments, $original_id, $data, $post_exists );
-
-			return false;
-		}
-
-		// Map the parent post, or mark it as one we need to fix
-		$requires_remapping = false;
-		if ( $parent_id ) {
-			if ( isset( $this->mapping['post'][ $parent_id ] ) ) {
-				$data['post_parent'] = $this->mapping['post'][ $parent_id ];
-			} else {
-				$meta[] = array( 'key' => '_wxr_import_parent', 'value' => $parent_id );
-				$requires_remapping = true;
-
-				$data['post_parent'] = 0;
-			}
-		}
-
-		// Map the author, or mark it as one we need to fix
-		$author = sanitize_user( $data['post_author'], true );
-		if ( empty( $author ) ) {
-			// Missing or invalid author, use default if available.
-			$data['post_author'] = $this->options['default_author'];
-		} elseif ( isset( $this->mapping['user_slug'][ $author ] ) ) {
-			$data['post_author'] = $this->mapping['user_slug'][ $author ];
-		} else {
-			$meta[] = array( 'key' => '_wxr_import_user_slug', 'value' => $author );
-			$requires_remapping = true;
-
-			$data['post_author'] = (int) get_current_user_id();
-		}
-
-		// Does the post look like it contains attachment images?
-		if ( preg_match( self::REGEX_HAS_ATTACHMENT_REFS, $data['post_content'] ) ) {
-			$meta[] = array( 'key' => '_wxr_import_has_attachment_refs', 'value' => true );
-			$requires_remapping = true;
-		}
-
-		// Whitelist to just the keys we allow
-		$postdata = array(
-			'import_id' => $data['post_id'],
-		);
-		$allowed = array(
-			'post_author'    => true,
-			'post_date'      => true,
-			'post_date_gmt'  => true,
-			'post_content'   => true,
-			'post_excerpt'   => true,
-			'post_title'     => true,
-			'post_status'    => true,
-			'post_name'      => true,
-			'comment_status' => true,
-			'ping_status'    => true,
-			'guid'           => true,
-			'post_parent'    => true,
-			'menu_order'     => true,
-			'post_type'      => true,
-			'post_password'  => true,
-		);
-		foreach ( $data as $key => $value ) {
-			if ( ! isset( $allowed[ $key ] ) ) {
-				continue;
-			}
-
-			$postdata[ $key ] = $data[ $key ];
-		}
-
-		$postdata = apply_filters( 'wp_import_post_data_processed', $postdata, $data );
-
-		if ( 'attachment' === $postdata['post_type'] ) {
-			if ( ! $this->options['fetch_attachments'] ) {
-				$this->logger->notice( sprintf(
-					__( 'Skipping attachment "%s", fetching attachments disabled' ),
-					$data['post_title']
-				) );
-				/**
-				 * Post processing skipped.
-				 *
-				 * @param array $data Raw data imported for the post.
-				 * @param array $meta Raw meta data, already processed by {@see process_post_meta}.
-				 */
-				do_action( 'wxr_importer.process_skipped.post', $data, $meta );
-				return false;
-			}
-			$remote_url = ! empty( $data['attachment_url'] ) ? $data['attachment_url'] : $data['guid'];
-			$post_id = $this->process_attachment( $postdata, $meta, $remote_url );
-		} else {
-			$post_id = wp_insert_post( $postdata, true );
-			do_action( 'wp_import_insert_post', $post_id, $original_id, $postdata, $data );
-		}
-
-		if ( is_wp_error( $post_id ) ) {
-			$this->logger->error( sprintf(
-				__( 'Failed to import "%s" (%s)', 'wordpress-importer' ),
-				$data['post_title'],
-				$post_type_object->labels->singular_name
-			) );
-			$this->logger->debug( $post_id->get_error_message() );
-
-			/**
-			 * Post processing failed.
-			 *
-			 * @param WP_Error $post_id Error object.
-			 * @param array $data Raw data imported for the post.
-			 * @param array $meta Raw meta data, already processed by {@see process_post_meta}.
-			 * @param array $comments Raw comment data, already processed by {@see process_comments}.
-			 * @param array $terms Raw term data, already processed.
-			 */
-			do_action( 'wxr_importer.process_failed.post', $post_id, $data, $meta, $comments, $terms );
-			return false;
-		}
-
-		// Ensure stickiness is handled correctly too
-		if ( $data['is_sticky'] === '1' ) {
-			stick_post( $post_id );
-		}
-
-		// map pre-import ID to local ID
-		$this->mapping['post'][ $original_id ] = (int) $post_id;
-		if ( $requires_remapping ) {
-			$this->requires_remapping['post'][ $post_id ] = true;
-		}
-		$this->mark_post_exists( $data, $post_id );
-
-		$this->logger->info( sprintf(
-			__( 'Imported "%s" (%s)', 'wordpress-importer' ),
-			$data['post_title'],
-			$post_type_object->labels->singular_name
-		) );
-		$this->logger->debug( sprintf(
-			__( 'Post %d remapped to %d', 'wordpress-importer' ),
-			$original_id,
-			$post_id
-		) );
-
-		// Handle the terms too
-		$terms = apply_filters( 'wp_import_post_terms', $terms, $post_id, $data );
-
-		if ( ! empty( $terms ) ) {
-			$term_ids = array();
-			foreach ( $terms as $term ) {
-				$taxonomy = $term['taxonomy'];
-				$key = sha1( $taxonomy . ':' . $term['slug'] );
-
-				if ( isset( $this->mapping['term'][ $key ] ) ) {
-					$term_ids[ $taxonomy ][] = (int) $this->mapping['term'][ $key ];
-				} else {
-					$meta[] = array( 'key' => '_wxr_import_term', 'value' => $term );
-					$requires_remapping = true;
-				}
-			}
-
-			foreach ( $term_ids as $tax => $ids ) {
-				$tt_ids = wp_set_post_terms( $post_id, $ids, $tax );
-				do_action( 'wp_import_set_post_terms', $tt_ids, $ids, $tax, $post_id, $data );
-			}
-		}
-
-		$this->process_comments( $comments, $post_id, $data );
-		$this->process_post_meta( $meta, $post_id, $data );
-
-		if ( 'nav_menu_item' === $data['post_type'] ) {
-			$this->process_menu_item_meta( $post_id, $data, $meta );
-		}
-
-		/**
-		 * Post processing completed.
-		 *
-		 * @param int $post_id New post ID.
-		 * @param array $data Raw data imported for the post.
-		 * @param array $meta Raw meta data, already processed by {@see process_post_meta}.
-		 * @param array $comments Raw comment data, already processed by {@see process_comments}.
-		 * @param array $terms Raw term data, already processed.
-		 */
-		do_action( 'wxr_importer.processed.post', $post_id, $data, $meta, $comments, $terms );
-	}
-
-	/**
-	 * Attempt to create a new menu item from import data
-	 *
-	 * Fails for draft, orphaned menu items and those without an associated nav_menu
-	 * or an invalid nav_menu term. If the post type or term object which the menu item
-	 * represents doesn't exist then the menu item will not be imported (waits until the
-	 * end of the import to retry again before discarding).
-	 *
-	 * @param array $item Menu item details from WXR file
-	 */
-	protected function process_menu_item_meta( $post_id, $data, $meta ) {
-
-		$item_type = get_post_meta( $post_id, '_menu_item_type', true );
-		$original_object_id = get_post_meta( $post_id, '_menu_item_object_id', true );
-		$object_id = null;
-
-		$this->logger->debug( sprintf( 'Processing menu item %s', $item_type ) );
-
-		$requires_remapping = false;
-		switch ( $item_type ) {
-			case 'taxonomy':
-				if ( isset( $this->mapping['term_id'][ $original_object_id ] ) ) {
-					$object_id = $this->mapping['term_id'][ $original_object_id ];
-				} else {
-					add_post_meta( $post_id, '_wxr_import_menu_item', wp_slash( $original_object_id ) );
-					$requires_remapping = true;
-				}
-				break;
-
-			case 'post_type':
-				if ( isset( $this->mapping['post'][ $original_object_id ] ) ) {
-					$object_id = $this->mapping['post'][ $original_object_id ];
-				} else {
-					add_post_meta( $post_id, '_wxr_import_menu_item', wp_slash( $original_object_id ) );
-					$requires_remapping = true;
-				}
-				break;
-
-			case 'custom':
-				// Custom refers to itself, wonderfully easy.
-				$object_id = $post_id;
-				break;
-
-			default:
-				// associated object is missing or not imported yet, we'll retry later
-				$this->missing_menu_items[] = $item;
-				$this->logger->debug( 'Unknown menu item type' );
-				break;
-		}
-
-		if ( $requires_remapping ) {
-			$this->requires_remapping['post'][ $post_id ] = true;
-		}
-
-		if ( empty( $object_id ) ) {
-			// Nothing needed here.
-			return;
-		}
-
-		$this->logger->debug( sprintf( 'Menu item %d mapped to %d', $original_object_id, $object_id ) );
-		update_post_meta( $post_id, '_menu_item_object_id', wp_slash( $object_id ) );
 	}
 
 	/**
@@ -1090,171 +946,6 @@ class WXR_Importer extends WP_Importer {
 		}
 
 		return $post_id;
-	}
-
-	/**
-	 * Parse a meta node into meta data.
-	 *
-	 * @param DOMElement $node Parent node of meta data (typically `wp:postmeta` or `wp:commentmeta`).
-	 * @return array|null Meta data array on success, or null on error.
-	 */
-	protected function parse_meta_node( $node ) {
-		foreach ( $node->childNodes as $child ) {
-			// We only care about child elements
-			if ( $child->nodeType !== XML_ELEMENT_NODE ) {
-				continue;
-			}
-
-			switch ( $child->tagName ) {
-				case 'wp:meta_key':
-					$key = $child->textContent;
-					break;
-
-				case 'wp:meta_value':
-					$value = $child->textContent;
-					break;
-			}
-		}
-
-		if ( empty( $key ) || empty( $value ) ) {
-			return null;
-		}
-
-		return compact( 'key', 'value' );
-	}
-
-	/**
-	 * Process and import post meta items.
-	 *
-	 * @param array $meta List of meta data arrays
-	 * @param int $post_id Post to associate with
-	 * @param array $post Post data
-	 * @return int|WP_Error Number of meta items imported on success, error otherwise.
-	 */
-	protected function process_post_meta( $meta, $post_id, $post ) {
-		if ( empty( $meta ) ) {
-			return true;
-		}
-
-		foreach ( $meta as $meta_item ) {
-			/**
-			 * Pre-process post meta data.
-			 *
-			 * @param array $meta_item Meta data. (Return empty to skip.)
-			 * @param int $post_id Post the meta is attached to.
-			 */
-			$meta_item = apply_filters( 'wxr_importer.pre_process.post_meta', $meta_item, $post_id );
-			if ( empty( $meta_item ) ) {
-				return false;
-			}
-
-			$key = apply_filters( 'import_post_meta_key', $meta_item['key'], $post_id, $post );
-			$value = false;
-
-			if ( '_edit_last' === $key ) {
-				$value = intval( $meta_item['value'] );
-				if ( ! isset( $this->mapping['user'][ $value ] ) ) {
-					// Skip!
-					continue;
-				}
-
-				$value = $this->mapping['user'][ $value ];
-			}
-
-			if ( $key ) {
-				// export gets meta straight from the DB so could have a serialized string
-				if ( ! $value ) {
-					$value = maybe_unserialize( $meta_item['value'] );
-				}
-
-				add_post_meta( $post_id, $key, $value );
-				do_action( 'import_post_meta', $post_id, $key, $value );
-
-				// if the post has a featured image, take note of this in case of remap
-				if ( '_thumbnail_id' === $key ) {
-					$this->featured_images[ $post_id ] = (int) $value;
-				}
-			}
-		}
-
-		return true;
-	}
-
-	/**
-	 * Parse a comment node into comment data.
-	 *
-	 * @param DOMElement $node Parent node of comment data (typically `wp:comment`).
-	 * @return array Comment data array.
-	 */
-	protected function parse_comment_node( $node ) {
-		$data = array(
-			'commentmeta' => array(),
-		);
-
-		foreach ( $node->childNodes as $child ) {
-			// We only care about child elements
-			if ( $child->nodeType !== XML_ELEMENT_NODE ) {
-				continue;
-			}
-
-			switch ( $child->tagName ) {
-				case 'wp:comment_id':
-					$data['comment_id'] = $child->textContent;
-					break;
-				case 'wp:comment_author':
-					$data['comment_author'] = $child->textContent;
-					break;
-
-				case 'wp:comment_author_email':
-					$data['comment_author_email'] = $child->textContent;
-					break;
-
-				case 'wp:comment_author_IP':
-					$data['comment_author_IP'] = $child->textContent;
-					break;
-
-				case 'wp:comment_author_url':
-					$data['comment_author_url'] = $child->textContent;
-					break;
-
-				case 'wp:comment_user_id':
-					$data['comment_user_id'] = $child->textContent;
-					break;
-
-				case 'wp:comment_date':
-					$data['comment_date'] = $child->textContent;
-					break;
-
-				case 'wp:comment_date_gmt':
-					$data['comment_date_gmt'] = $child->textContent;
-					break;
-
-				case 'wp:comment_content':
-					$data['comment_content'] = $child->textContent;
-					break;
-
-				case 'wp:comment_approved':
-					$data['comment_approved'] = $child->textContent;
-					break;
-
-				case 'wp:comment_type':
-					$data['comment_type'] = $child->textContent;
-					break;
-
-				case 'wp:comment_parent':
-					$data['comment_parent'] = $child->textContent;
-					break;
-
-				case 'wp:commentmeta':
-					$meta_item = $this->parse_meta_node( $child );
-					if ( ! empty( $meta_item ) ) {
-						$data['commentmeta'][] = $meta_item;
-					}
-					break;
-			}
-		}
-
-		return $data;
 	}
 
 	/**
@@ -1388,93 +1079,589 @@ class WXR_Importer extends WP_Importer {
 		return $num_comments;
 	}
 
-	protected function parse_category_node( $node ) {
-		$data = array(
-			// Default taxonomy to "category", since this is a `<category>` tag
-			'taxonomy' => 'category',
-		);
-		$meta = array();
-
-		if ( $node->hasAttribute( 'domain' ) ) {
-			$data['taxonomy'] = $node->getAttribute( 'domain' );
-		}
-		if ( $node->hasAttribute( 'nicename' ) ) {
-			$data['slug'] = $node->getAttribute( 'nicename' );
+	protected function post_process_menu_item( $post_id ) {
+		$menu_object_id = get_post_meta( $post_id, '_wxr_import_menu_item', true );
+		if ( empty( $menu_object_id ) ) {
+			// No processing needed!
+			return;
 		}
 
-		$data['name'] = $node->textContent;
+		$menu_item_type = get_post_meta( $post_id, '_menu_item_type', true );
+		switch ( $menu_item_type ) {
+			case 'taxonomy':
+				if ( isset( $this->mapping['term_id'][ $menu_object_id ] ) ) {
+					$menu_object = $this->mapping['term_id'][ $menu_object_id ];
+				}
+				break;
 
-		if ( empty( $data['slug'] ) ) {
-			return null;
+			case 'post_type':
+				if ( isset( $this->mapping['post'][ $menu_object_id ] ) ) {
+					$menu_object = $this->mapping['post'][ $menu_object_id ];
+				}
+				break;
+
+			default:
+				// Cannot handle this.
+				return;
 		}
 
-		// Just for extra compatibility
-		if ( $data['taxonomy'] === 'tag' ) {
-			$data['taxonomy'] = 'post_tag';
+		if ( ! empty( $menu_object ) ) {
+			update_post_meta( $post_id, '_menu_item_object_id', wp_slash( $menu_object ) );
+		} else {
+			$this->logger->warning( sprintf(
+				__( 'Could not find the menu object for "%s" (post #%d)', 'wordpress-importer' ),
+				get_the_title( $post_id ),
+				$post_id
+			) );
+			$this->logger->debug( sprintf(
+				__( 'Post %d was imported with object "%d" of type "%s", but could not be found', 'wordpress-importer' ),
+				$post_id,
+				$menu_object_id,
+				$menu_item_type
+			) );
 		}
 
-		return $data;
+		delete_post_meta( $post_id, '_wxr_import_menu_item' );
 	}
 
 	/**
-	 * Callback for `usort` to sort comments by ID
+	 * Attempt to create a new menu item from import data
 	 *
-	 * @param array $a Comment data for the first comment
-	 * @param array $b Comment data for the second comment
-	 * @return int
+	 * Fails for draft, orphaned menu items and those without an associated nav_menu
+	 * or an invalid nav_menu term. If the post type or term object which the menu item
+	 * represents doesn't exist then the menu item will not be imported (waits until the
+	 * end of the import to retry again before discarding).
+	 *
+	 * @param array $item Menu item details from WXR file
 	 */
-	public static function sort_comments_by_id( $a, $b ) {
-		if ( empty( $a['comment_id'] ) ) {
-			return 1;
+	protected function process_menu_item_meta( $post_id, $data, $meta ) {
+
+		$item_type = get_post_meta( $post_id, '_menu_item_type', true );
+		$original_object_id = get_post_meta( $post_id, '_menu_item_object_id', true );
+		$object_id = null;
+
+		$this->logger->debug( sprintf( 'Processing menu item %s', $item_type ) );
+
+		$requires_remapping = false;
+		switch ( $item_type ) {
+			case 'taxonomy':
+				if ( isset( $this->mapping['term_id'][ $original_object_id ] ) ) {
+					$object_id = $this->mapping['term_id'][ $original_object_id ];
+				} else {
+					add_post_meta( $post_id, '_wxr_import_menu_item', wp_slash( $original_object_id ) );
+					$requires_remapping = true;
+				}
+				break;
+
+			case 'post_type':
+				if ( isset( $this->mapping['post'][ $original_object_id ] ) ) {
+					$object_id = $this->mapping['post'][ $original_object_id ];
+				} else {
+					add_post_meta( $post_id, '_wxr_import_menu_item', wp_slash( $original_object_id ) );
+					$requires_remapping = true;
+				}
+				break;
+
+			case 'custom':
+				// Custom refers to itself, wonderfully easy.
+				$object_id = $post_id;
+				break;
+
+			default:
+				// associated object is missing or not imported yet, we'll retry later
+				$this->missing_menu_items[] = $item;
+				$this->logger->debug( 'Unknown menu item type' );
+				break;
 		}
 
-		if ( empty( $b['comment_id'] ) ) {
-			return -1;
+		if ( $requires_remapping ) {
+			$this->requires_remapping['post'][ $post_id ] = true;
 		}
 
-		return $a['comment_id'] - $b['comment_id'];
+		if ( empty( $object_id ) ) {
+			// Nothing needed here.
+			return;
+		}
+
+		$this->logger->debug( sprintf( 'Menu item %d mapped to %d', $original_object_id, $object_id ) );
+		update_post_meta( $post_id, '_menu_item_object_id', wp_slash( $object_id ) );
 	}
 
-	protected function parse_author_node( $node ) {
-		$data = array();
-		$meta = array();
-		foreach ( $node->childNodes as $child ) {
-			// We only care about child elements
-			if ( $child->nodeType !== XML_ELEMENT_NODE ) {
+	/**
+	 * Create new posts based on import information
+	 *
+	 * Posts marked as having a parent which doesn't exist will become top level items.
+	 * Doesn't create a new post if: the post type doesn't exist, the given post ID
+	 * is already noted as imported or a post with the same title and date already exists.
+	 * Note that new/updated terms, comments and meta are imported for the last of the above.
+	 */
+	protected function process_post( $data, $meta, $comments, $terms ) {
+		/**
+		 * Pre-process post data.
+		 *
+		 * @param array $data Post data. (Return empty to skip.)
+		 * @param array $meta Meta data.
+		 * @param array $comments Comments on the post.
+		 * @param array $terms Terms on the post.
+		 */
+		$data = apply_filters( 'wxr_importer.pre_process.post', $data, $meta, $comments, $terms );
+		if ( empty( $data ) ) {
+			return false;
+		}
+
+		$original_id = isset( $data['post_id'] )     ? (int) $data['post_id']     : 0;
+		$parent_id   = isset( $data['post_parent'] ) ? (int) $data['post_parent'] : 0;
+		$author_id   = isset( $data['post_author'] ) ? (int) $data['post_author'] : 0;
+
+		// Have we already processed this?
+		if ( isset( $this->mapping['post'][ $original_id ] ) ) {
+			return;
+		}
+
+		$post_type_object = get_post_type_object( $data['post_type'] );
+
+		// Is this type even valid?
+		if ( ! $post_type_object ) {
+			$this->logger->warning( sprintf(
+				__( 'Failed to import "%s": Invalid post type %s', 'wordpress-importer' ),
+				$data['post_title'],
+				$data['post_type']
+			) );
+			return false;
+		}
+
+		$post_exists = $this->post_exists( $data );
+		if ( $post_exists ) {
+			$this->logger->info( sprintf(
+				__( '%s "%s" already exists.', 'wordpress-importer' ),
+				$post_type_object->labels->singular_name,
+				$data['post_title']
+			) );
+
+			/**
+			 * Post processing already imported.
+			 *
+			 * @param array $data Raw data imported for the post.
+			 */
+			do_action( 'wxr_importer.process_already_imported.post', $data );
+
+			// Even though this post already exists, new comments might need importing
+			$this->process_comments( $comments, $original_id, $data, $post_exists );
+
+			return false;
+		}
+
+		// Map the parent post, or mark it as one we need to fix
+		$requires_remapping = false;
+		if ( $parent_id ) {
+			if ( isset( $this->mapping['post'][ $parent_id ] ) ) {
+				$data['post_parent'] = $this->mapping['post'][ $parent_id ];
+			} else {
+				$meta[] = array( 'key' => '_wxr_import_parent', 'value' => $parent_id );
+				$requires_remapping = true;
+
+				$data['post_parent'] = 0;
+			}
+		}
+
+		// Map the author, or mark it as one we need to fix
+		$author = sanitize_user( $data['post_author'], true );
+		if ( empty( $author ) ) {
+			// Missing or invalid author, use default if available.
+			$data['post_author'] = $this->options['default_author'];
+ 		} elseif ( isset( $this->mapping['user_slug'][ $author ] ) ) {
+ 			$data['post_author'] = $this->mapping['user_slug'][ $author ];
+		} else {
+			$meta[] = array( 'key' => '_wxr_import_user_slug', 'value' => $author );
+			$requires_remapping = true;
+
+			$data['post_author'] = (int) get_current_user_id();
+		}
+
+		// Does the post look like it contains attachment images?
+		if ( preg_match( self::REGEX_HAS_ATTACHMENT_REFS, $data['post_content'] ) ) {
+			$meta[] = array( 'key' => '_wxr_import_has_attachment_refs', 'value' => true );
+			$requires_remapping = true;
+		}
+
+		// Whitelist to just the keys we allow
+		$postdata = array(
+			'import_id' => $data['post_id'],
+		);
+		$allowed = array(
+			'post_author'    => true,
+			'post_date'      => true,
+			'post_date_gmt'  => true,
+			'post_content'   => true,
+			'post_excerpt'   => true,
+			'post_title'     => true,
+			'post_status'    => true,
+			'post_name'      => true,
+			'comment_status' => true,
+			'ping_status'    => true,
+			'guid'           => true,
+			'post_parent'    => true,
+			'menu_order'     => true,
+			'post_type'      => true,
+			'post_password'  => true,
+		);
+		foreach ( $data as $key => $value ) {
+			if ( ! isset( $allowed[ $key ] ) ) {
 				continue;
 			}
 
-			switch ( $child->tagName ) {
-				case 'wp:author_login':
-					$data['user_login'] = $child->textContent;
-					break;
+			$postdata[ $key ] = $data[ $key ];
+		}
 
-				case 'wp:author_id':
-					$data['ID'] = $child->textContent;
-					break;
+		$postdata = apply_filters( 'wp_import_post_data_processed', $postdata, $data );
 
-				case 'wp:author_email':
-					$data['user_email'] = $child->textContent;
-					break;
+		if ( 'attachment' === $postdata['post_type'] ) {
+			if ( ! $this->options['fetch_attachments'] ) {
+				$this->logger->notice( sprintf(
+					__( 'Skipping attachment "%s", fetching attachments disabled' ),
+					$data['post_title']
+				) );
+				/**
+				 * Post processing skipped.
+				 *
+				 * @param array $data Raw data imported for the post.
+				 * @param array $meta Raw meta data, already processed by {@see process_post_meta}.
+				 */
+				do_action( 'wxr_importer.process_skipped.post', $data, $meta );
+				return false;
+			}
+			$remote_url = ! empty( $data['attachment_url'] ) ? $data['attachment_url'] : $data['guid'];
+			$post_id = $this->process_attachment( $postdata, $meta, $remote_url );
+		} else {
+			$post_id = wp_insert_post( $postdata, true );
+			do_action( 'wp_import_insert_post', $post_id, $original_id, $postdata, $data );
+		}
 
-				case 'wp:author_display_name':
-					$data['display_name'] = $child->textContent;
-					break;
+		if ( is_wp_error( $post_id ) ) {
+			$this->logger->error( sprintf(
+				__( 'Failed to import "%s" (%s)', 'wordpress-importer' ),
+				$data['post_title'],
+				$post_type_object->labels->singular_name
+			) );
+			$this->logger->debug( $post_id->get_error_message() );
 
-				case 'wp:author_first_name':
-					$data['first_name'] = $child->textContent;
-					break;
+			/**
+			 * Post processing failed.
+			 *
+			 * @param WP_Error $post_id Error object.
+			 * @param array $data Raw data imported for the post.
+			 * @param array $meta Raw meta data, already processed by {@see process_post_meta}.
+			 * @param array $comments Raw comment data, already processed by {@see process_comments}.
+			 * @param array $terms Raw term data, already processed.
+			 */
+			do_action( 'wxr_importer.process_failed.post', $post_id, $data, $meta, $comments, $terms );
+			return false;
+		}
 
-				case 'wp:author_last_name':
-					$data['last_name'] = $child->textContent;
-					break;
+		// Ensure stickiness is handled correctly too
+		if ( $data['is_sticky'] === '1' ) {
+			stick_post( $post_id );
+		}
+
+		// map pre-import ID to local ID
+		$this->mapping['post'][ $original_id ] = (int) $post_id;
+		if ( $requires_remapping ) {
+			$this->requires_remapping['post'][ $post_id ] = true;
+		}
+		$this->mark_post_exists( $data, $post_id );
+
+		$this->logger->info( sprintf(
+			__( 'Imported "%s" (%s)', 'wordpress-importer' ),
+			$data['post_title'],
+			$post_type_object->labels->singular_name
+		) );
+		$this->logger->debug( sprintf(
+			__( 'Post %d remapped to %d', 'wordpress-importer' ),
+			$original_id,
+			$post_id
+		) );
+
+		// Handle the terms too
+		$terms = apply_filters( 'wp_import_post_terms', $terms, $post_id, $data );
+
+		if ( ! empty( $terms ) ) {
+			$term_ids = array();
+			foreach ( $terms as $term ) {
+				$taxonomy = $term['taxonomy'];
+				$key = sha1( $taxonomy . ':' . $term['slug'] );
+
+				if ( isset( $this->mapping['term'][ $key ] ) ) {
+					$term_ids[ $taxonomy ][] = (int) $this->mapping['term'][ $key ];
+				} else {
+					$meta[] = array( 'key' => '_wxr_import_term', 'value' => $term );
+					$this->requires_remapping['post'][ $post_id ] = true;
+				}
+			}
+
+			foreach ( $term_ids as $tax => $ids ) {
+				$tt_ids = wp_set_post_terms( $post_id, $ids, $tax );
+				do_action( 'wp_import_set_post_terms', $tt_ids, $ids, $tax, $post_id, $data );
 			}
 		}
 
-		return compact( 'data', 'meta' );
+		$this->process_comments( $comments, $post_id, $data );
+		$this->process_post_meta( $meta, $post_id, $data );
+
+		if ( 'nav_menu_item' === $data['post_type'] ) {
+			$this->process_menu_item_meta( $post_id, $data, $meta );
+		}
+
+		/**
+		 * Post processing completed.
+		 *
+		 * @param int $post_id New post ID.
+		 * @param array $data Raw data imported for the post.
+		 * @param array $meta Raw meta data, already processed by {@see process_post_meta}.
+		 * @param array $comments Raw comment data, already processed by {@see process_comments}.
+		 * @param array $terms Raw term data, already processed.
+		 */
+		do_action( 'wxr_importer.processed.post', $post_id, $data, $meta, $comments, $terms );
 	}
 
-	protected function process_author( $data, $meta ) {
+	/**
+	 * Process and import post meta items.
+	 *
+	 * @param array $meta List of meta data arrays
+	 * @param int $post_id Post to associate with
+	 * @param array $post Post data
+	 * @return int|WP_Error Number of meta items imported on success, error otherwise.
+	 */
+	protected function process_post_meta( $meta, $post_id, $post ) {
+		if ( empty( $meta ) ) {
+			return true;
+		}
+
+		foreach ( $meta as $meta_item ) {
+			/**
+			 * Pre-process post meta data.
+			 *
+			 * @param array $meta_item Meta data. (Return empty to skip.)
+			 * @param int $post_id Post the meta is attached to.
+			 */
+			$meta_item = apply_filters( 'wxr_importer.pre_process.post_meta', $meta_item, $post_id );
+			if ( empty( $meta_item ) ) {
+				return false;
+			}
+
+			$key = apply_filters( 'import_post_meta_key', $meta_item['key'], $post_id, $post );
+			$value = false;
+
+			if ( '_edit_last' === $key ) {
+				$value = intval( $meta_item['value'] );
+				if ( ! isset( $this->mapping['user'][ $value ] ) ) {
+					// Skip!
+					continue;
+				}
+
+				$value = $this->mapping['user'][ $value ];
+			}
+
+			if ( $key ) {
+				// export gets meta straight from the DB so could have a serialized string
+				if ( ! $value ) {
+					$value = maybe_unserialize( $meta_item['value'] );
+				}
+
+				add_post_meta( $post_id, $key, $value );
+				do_action( 'import_post_meta', $post_id, $key, $value );
+
+				// if the post has a featured image, take note of this in case of remap
+				if ( '_thumbnail_id' === $key ) {
+					$this->featured_images[ $post_id ] = (int) $value;
+				}
+			}
+		}
+
+		return true;
+	}
+
+	protected function process_term( $data, $meta ) {
+		/**
+		 * Pre-process term data.
+		 *
+		 * @param array $data Term data. (Return empty to skip.)
+		 * @param array $meta Meta data.
+		 */
+		$data = apply_filters( 'wxr_importer.pre_process.term', $data, $meta );
+		if ( empty( $data ) ) {
+			return false;
+		}
+
+		$original_id = isset( $data['id'] )      ? (int) $data['id']      : 0;
+
+		$mapping_key = sha1( $data['taxonomy'] . ':' . $data['slug'] );
+		$existing = $this->term_exists( $data );
+		if ( $existing ) {
+
+			/**
+			 * Term processing already imported.
+			 *
+			 * @param array $data Raw data imported for the term.
+			 */
+			do_action( 'wxr_importer.process_already_imported.term', $data );
+
+			$this->mapping['term'][ $mapping_key ] = $existing;
+			$this->mapping['term_id'][ $original_id ] = $existing;
+			return false;
+		}
+
+		// WP really likes to repeat itself in export files
+		if ( isset( $this->mapping['term'][ $mapping_key ] ) ) {
+			return false;
+		}
+
+		$termdata = array();
+		$allowed = array(
+			'slug' => true,
+			'parent' => true,
+			'description' => true,
+		);
+
+		/*
+		 * Does this term have a parent?
+		 * Note: $data['parent'] is the slug of the parent term.
+		 */
+		$requires_remapping = false;
+		if ( ! empty( $data['parent'] ) ) {
+			// map the parent temr, or mark it as one we need to fix.
+			$parent_mapping_key = sha1( $data['taxonomy'] . ':' . $data['parent'] );
+
+			// First, look in the mapping array.
+			if ( isset ( $this->mapping['term'][ $parent_mapping_key] ) ) {
+				$data['parent'] = $this->mapping['term'][ $parent_mapping_key ];
+			}
+			// Next, see if the term already exists
+			elseif ( $parent_id = $this->term_exists( array( 'taxonomy' => $data['taxonomy'], 'slug' => $data['parent'] ) ) ) {
+				$data['parent'] = $parent_id;
+			}
+			else {
+				// Prepare for remapping later, using the slug.
+				$meta[] = array( 'key' => '_wxr_import_parent', 'value' => $data['parent'] );
+				$requires_remapping = true;
+
+				// Wipe the parent for now
+				$data['parent'] = 0;
+			}
+		}
+
+		foreach ( $data as $key => $value ) {
+			if ( ! isset( $allowed[ $key ] ) ) {
+				continue;
+			}
+
+			$termdata[ $key ] = $data[ $key ];
+		}
+
+		$result = wp_insert_term( $data['name'], $data['taxonomy'], $termdata );
+		if ( is_wp_error( $result ) ) {
+			$this->logger->warning( sprintf(
+				__( 'Failed to import %s %s', 'wordpress-importer' ),
+				$data['taxonomy'],
+				$data['name']
+			) );
+			$this->logger->debug( $result->get_error_message() );
+			do_action( 'wp_import_insert_term_failed', $result, $data );
+
+			/**
+			 * Term processing failed.
+			 *
+			 * @param WP_Error $result Error object.
+			 * @param array $data Raw data imported for the term.
+			 * @param array $meta Meta data supplied for the term.
+			 */
+			do_action( 'wxr_importer.process_failed.term', $result, $data, $meta );
+			return false;
+		}
+
+		$term_id = $result['term_id'];
+
+		// Add the new term to the mapping array.
+		$this->mapping['term'][ $mapping_key ] = $term_id;
+		$this->mapping['term_id'][ $original_id ] = $term_id;
+
+		// Add the new term to the exists array.
+		$this->exists['term'][ $mapping_key ] = $term_id;
+
+		// Add the termmeta if necessary
+		if ( $requires_remapping ) {
+			foreach ( $meta as $insert ) {
+				update_term_meta( $term_id, $insert['key'], $insert['value'] );
+			}
+			$this->requires_remapping['term'][ $term_id ] = true;
+		}
+
+		$this->logger->info( sprintf(
+			__( 'Imported "%s" (%s)', 'wordpress-importer' ),
+			$data['name'],
+			$data['taxonomy']
+		) );
+		$this->logger->debug( sprintf(
+			__( 'Term %d remapped to %d', 'wordpress-importer' ),
+			$original_id,
+			$term_id
+		) );
+
+		do_action( 'wp_import_insert_term', $term_id, $data );
+
+		$this->process_term_meta( $meta, $term_id, $data );
+
+		/**
+		 * Term processing completed.
+		 *
+		 * @param int $term_id New term ID.
+		 * @param array $data Raw data imported for the term.
+		 */
+		do_action( 'wxr_importer.processed.term', $term_id, $data );
+	}
+
+	/**
+	 * Process and import term meta items.
+	 *
+	 * @param array $meta List of meta data arrays
+	 * @param int $post_id Post to associate with
+	 * @param array $term Term data
+	 * @return int|WP_Error Number of meta items imported on success, error otherwise.
+	 */
+	protected function process_term_meta( $meta, $term_id, $term ) {
+		if ( empty( $meta ) ) {
+			return true;
+		}
+
+		foreach ( $meta as $meta_item ) {
+			/**
+			 * Pre-process post meta data.
+			 *
+			 * @param array $meta_item Meta data. (Return empty to skip.)
+			 * @param int $term_id Term the meta is attached to.
+			 */
+			$meta_item = apply_filters( 'wxr_importer.pre_process.term_meta', $meta_item, $term_id );
+			if ( empty( $meta_item ) ) {
+				return false;
+			}
+
+			$key = apply_filters( 'import_term_meta_key', $meta_item['key'], $term_id, $term );
+			$value = false;
+
+			if ( $key ) {
+				// export gets meta straight from the DB so could have a serialized string
+				if ( ! $value ) {
+					$value = maybe_unserialize( $meta_item['value'] );
+				}
+
+				add_term_meta( $term_id, $key, $value );
+				do_action( 'import_term_meta', $term_id, $key, $value );
+			}
+		}
+
+		return true;
+	}
+
+	protected function process_user( $data, $meta ) {
 		/**
 		 * Pre-process user data.
 		 *
@@ -1494,15 +1681,15 @@ class WXR_Importer extends WP_Importer {
 			$existing = $this->mapping['user'][ $original_id ];
 
 			// Note the slug mapping if we need to too
-			if ( ! isset( $this->mapping['user_slug'][ $original_slug ] ) ) {
-				$this->mapping['user_slug'][ $original_slug ] = $existing;
-			}
+ 			if ( ! isset( $this->mapping['user_slug'][ $original_slug ] ) ) {
+ 				$this->mapping['user_slug'][ $original_slug ] = $existing;
+ 			}
 
 			return false;
 		}
 
-		if ( isset( $this->mapping['user_slug'][ $original_slug ] ) ) {
-			$existing = $this->mapping['user_slug'][ $original_slug ];
+ 		if ( isset( $this->mapping['user_slug'][ $original_slug ] ) ) {
+ 			$existing = $this->mapping['user_slug'][ $original_slug ];
 
 			// Ensure we note the mapping too
 			$this->mapping['user'][ $original_id ] = $existing;
@@ -1578,179 +1765,50 @@ class WXR_Importer extends WP_Importer {
 		do_action( 'wxr_importer.processed.user', $user_id, $userdata );
 	}
 
-	protected function parse_term_node( $node, $type = 'term' ) {
-		$data = array();
-		$meta = array();
-
-		$tag_name = array(
-			'id'          => 'wp:term_id',
-			'taxonomy'    => 'wp:term_taxonomy',
-			'slug'        => 'wp:term_slug',
-			'parent'      => 'wp:term_parent',
-			'name'        => 'wp:term_name',
-			'description' => 'wp:term_description',
-		);
-		$taxonomy = null;
-
-		// Special casing!
-		switch ( $type ) {
-			case 'category':
-				$tag_name['slug']        = 'wp:category_nicename';
-				$tag_name['parent']      = 'wp:category_parent';
-				$tag_name['name']        = 'wp:cat_name';
-				$tag_name['description'] = 'wp:category_description';
-				$tag_name['taxonomy']    = null;
-
-				$data['taxonomy'] = 'category';
-				break;
-
-			case 'tag':
-				$tag_name['slug']        = 'wp:tag_slug';
-				$tag_name['parent']      = null;
-				$tag_name['name']        = 'wp:tag_name';
-				$tag_name['description'] = 'wp:tag_description';
-				$tag_name['taxonomy']    = null;
-
-				$data['taxonomy'] = 'post_tag';
-				break;
+	/**
+	 * Callback for `usort` to sort comments by ID
+	 *
+	 * @param array $a Comment data for the first comment
+	 * @param array $b Comment data for the second comment
+	 * @return int
+	 */
+	public static function sort_comments_by_id( $a, $b ) {
+		if ( empty( $a['comment_id'] ) ) {
+			return 1;
 		}
 
-		foreach ( $node->childNodes as $child ) {
-			// We only care about child elements
-			if ( $child->nodeType !== XML_ELEMENT_NODE ) {
-				continue;
-			}
-
-			$key = array_search( $child->tagName, $tag_name );
-			if ( $key ) {
-				$data[ $key ] = $child->textContent;
-			}
+		if ( empty( $b['comment_id'] ) ) {
+			return -1;
 		}
 
-		if ( empty( $data['taxonomy'] ) ) {
-			return null;
-		}
-
-		// Compatibility with WXR 1.0
-		if ( $data['taxonomy'] === 'tag' ) {
-			$data['taxonomy'] = 'post_tag';
-		}
-
-		return compact( 'data', 'meta' );
+		return $a['comment_id'] - $b['comment_id'];
 	}
 
-	protected function process_term( $data, $meta ) {
-		/**
-		 * Pre-process term data.
-		 *
-		 * @param array $data Term data. (Return empty to skip.)
-		 * @param array $meta Meta data.
-		 */
-		$data = apply_filters( 'wxr_importer.pre_process.term', $data, $meta );
-		if ( empty( $data ) ) {
-			return false;
-		}
-
-		$original_id = isset( $data['id'] )      ? (int) $data['id']      : 0;
-		$parent_id   = isset( $data['parent'] )  ? (int) $data['parent']  : 0;
-
-		$mapping_key = sha1( $data['taxonomy'] . ':' . $data['slug'] );
-		$existing = $this->term_exists( $data );
-		if ( $existing ) {
-
-			/**
-			 * Term processing already imported.
-			 *
-			 * @param array $data Raw data imported for the term.
-			 */
-			do_action( 'wxr_importer.process_already_imported.term', $data );
-
-			$this->mapping['term'][ $mapping_key ] = $existing;
-			$this->mapping['term_id'][ $original_id ] = $existing;
-			return false;
-		}
-
-		// WP really likes to repeat itself in export files
-		if ( isset( $this->mapping['term'][ $mapping_key ] ) ) {
-			return false;
-		}
-
-		$termdata = array();
-		$allowed = array(
-			'slug' => true,
-			'description' => true,
-		);
-
-		// Map the parent comment, or mark it as one we need to fix
-		// TODO: add parent mapping and remapping
-		/*$requires_remapping = false;
-		if ( $parent_id ) {
-			if ( isset( $this->mapping['term'][ $parent_id ] ) ) {
-				$data['parent'] = $this->mapping['term'][ $parent_id ];
-			} else {
-				// Prepare for remapping later
-				$meta[] = array( 'key' => '_wxr_import_parent', 'value' => $parent_id );
-				$requires_remapping = true;
-
-				// Wipe the parent for now
-				$data['parent'] = 0;
-			}
-		}*/
-
+	/**
+	 * Remap data keys from XML element name to what process_xxx() expects
+	 *
+	 * @param array $data Parsed XML data.  key is XML element name,
+	 *                    value is element's value.
+	 * @param array $keymap Map of XML element name to processing key.
+	 *                      key is XML element name, value is what that
+	 *                      key maps to (or true if key should map to itself)
+	 * @return array
+	 */
+	protected function remap_xml_keys( $data, $keymap ) {
 		foreach ( $data as $key => $value ) {
-			if ( ! isset( $allowed[ $key ] ) ) {
+			if ( ! isset( $keymap[ $key ] ) ) {
+				unset( $data[ $key ] );
+
 				continue;
 			}
 
-			$termdata[ $key ] = $data[ $key ];
+			if ( is_string( $keymap[$key] ) ) {
+				$data[ $keymap[$key] ] = $data[ $key ];
+				unset ( $data[ $key ] );
+			}
 		}
 
-		$result = wp_insert_term( $data['name'], $data['taxonomy'], $termdata );
-		if ( is_wp_error( $result ) ) {
-			$this->logger->warning( sprintf(
-				__( 'Failed to import %s %s', 'wordpress-importer' ),
-				$data['taxonomy'],
-				$data['name']
-			) );
-			$this->logger->debug( $result->get_error_message() );
-			do_action( 'wp_import_insert_term_failed', $result, $data );
-
-			/**
-			 * Term processing failed.
-			 *
-			 * @param WP_Error $result Error object.
-			 * @param array $data Raw data imported for the term.
-			 * @param array $meta Meta data supplied for the term.
-			 */
-			do_action( 'wxr_importer.process_failed.term', $result, $data, $meta );
-			return false;
-		}
-
-		$term_id = $result['term_id'];
-
-		$this->mapping['term'][ $mapping_key ] = $term_id;
-		$this->mapping['term_id'][ $original_id ] = $term_id;
-
-		$this->logger->info( sprintf(
-			__( 'Imported "%s" (%s)', 'wordpress-importer' ),
-			$data['name'],
-			$data['taxonomy']
-		) );
-		$this->logger->debug( sprintf(
-			__( 'Term %d remapped to %d', 'wordpress-importer' ),
-			$original_id,
-			$term_id
-		) );
-
-		do_action( 'wp_import_insert_term', $term_id, $data );
-
-		/**
-		 * Term processing completed.
-		 *
-		 * @param int $term_id New term ID.
-		 * @param array $data Raw data imported for the term.
-		 */
-		do_action( 'wxr_importer.processed.term', $term_id, $data );
+		return $data;
 	}
 
 	/**
@@ -1829,6 +1887,9 @@ class WXR_Importer extends WP_Importer {
 		if ( ! empty( $this->requires_remapping['comment'] ) ) {
 			$this->post_process_comments( $this->requires_remapping['comment'] );
 		}
+		if ( ! empty( $this->requires_remapping['term'] ) ) {
+			$this->post_process_terms( $this->requires_remapping['term'] );
+		}
 	}
 
 	protected function post_process_posts( $todo ) {
@@ -1864,8 +1925,8 @@ class WXR_Importer extends WP_Importer {
 			$author_slug = get_post_meta( $post_id, '_wxr_import_user_slug', true );
 			if ( ! empty( $author_slug ) ) {
 				// Have we imported the user now?
-				if ( isset( $this->mapping['user_slug'][ $author_slug ] ) ) {
-					$data['post_author'] = $this->mapping['user_slug'][ $author_slug ];
+ 				if ( isset( $this->mapping['user_slug'][ $author_slug ] ) ) {
+ 					$data['post_author'] = $this->mapping['user_slug'][ $author_slug ];
 				} else {
 					$this->logger->warning( sprintf(
 						__( 'Could not find the author for "%s" (post #%d)', 'wordpress-importer' ),
@@ -1896,6 +1957,42 @@ class WXR_Importer extends WP_Importer {
 				$this->post_process_menu_item( $post_id );
 			}
 
+			$terms = get_post_meta( $post_id, '_wxr_import_term', false );
+			if ( ! empty( $terms ) ) {
+				$term_ids = array();
+				foreach ( $terms as $term ) {
+					// Have we imported the term now?
+					$mapping_key = sha1( $term['taxonomy'] . ':' . $term['slug'] );
+					if ( isset( $this->mapping['term'][ $mapping_key ] ) ) {
+						$term_ids[ $term['taxonomy'] ][] = $this->mapping['term'][ $mapping_key ];
+					}
+					// Next, see if the term already exists.
+					elseif ( $term_id = $this->term_exists(
+							array( 'taxonomy' => $term['taxonomy'], 'slug' => $term['slug'] ) ) ) {
+						$term_ids[ $term['taxonomy'] ][] = $term_id;
+					}
+					else {
+						$_term = wp_insert_term( $term['name'], $term['taxonomy'],
+							array( 'slug' => $term['slug'] ) );
+						$term_id = $_term['term_id'];
+						$term_ids[ $term['taxonomy'] ][] = $term_id;
+
+						// Add the new term to the mapping array.
+						$this->mapping['term'][ $mapping_key ] = $term_id;
+
+						// Add the new term to the exists array.
+						$this->exists['term'][ $mapping_key ] = $term_id;
+					}
+				}
+
+				foreach ( $term_ids as $tax => $ids ) {
+					$tt_ids = wp_set_post_terms( $post_id, $ids, $tax );
+					// @todo we don't have the $data array that is passed as the last param
+					// to this action in $this->process_post().  Can we reconstruct it here?
+					do_action( 'wp_import_set_post_terms', $tt_ids, $ids, $tax, $post_id );
+				}
+			}
+
 			// Do we have updates to make?
 			if ( empty( $data ) ) {
 				$this->logger->debug( sprintf(
@@ -1922,54 +2019,54 @@ class WXR_Importer extends WP_Importer {
 			delete_post_meta( $post_id, '_wxr_import_parent' );
 			delete_post_meta( $post_id, '_wxr_import_user_slug' );
 			delete_post_meta( $post_id, '_wxr_import_has_attachment_refs' );
+			delete_post_meta( $post_id, '_wxr_import_term' );
 		}
 	}
 
-	protected function post_process_menu_item( $post_id ) {
-		$menu_object_id = get_post_meta( $post_id, '_wxr_import_menu_item', true );
-		if ( empty( $menu_object_id ) ) {
-			// No processing needed!
-			return;
-		}
+	protected  function post_process_terms( $todo ) {
+		foreach ( $todo as $term_id => $_ ) {
+			$data = array();
 
-		$menu_item_type = get_post_meta( $post_id, '_menu_item_type', true );
-		switch ( $menu_item_type ) {
-			case 'taxonomy':
-				if ( isset( $this->mapping['term_id'][ $menu_object_id ] ) ) {
-					$menu_object = $this->mapping['term_id'][ $menu_object_id ];
+			$parent_term_slug = get_term_meta( $term_id, '_wxr_import_parent', true );
+			if ( ! empty( $parent_term_slug ) ) {
+				$term = get_term( (int) $term_id );
+				$parent_mapping_key = sha1( $term->taxonomy . ':' . $parent_term_slug );
+
+				// Have we imported the parent now?
+				if ( isset( $this->mapping['term'][ $parent_mapping_key ] ) ) {
+					$data['parent'] = $this->mapping['term'][ $parent_mapping_key ];
 				}
-				break;
-
-			case 'post_type':
-				if ( isset( $this->mapping['post'][ $menu_object_id ] ) ) {
-					$menu_object = $this->mapping['post'][ $menu_object_id ];
+				// Next, wee if the term already exists.
+				elseif ( $parent_id = $this->term_exists(
+						array( 'taxonomy' => $term->taxonomy, 'slug' => $parent_term_slug ) ) ) {
+					$data['parent'] = $parent_id;
 				}
-				break;
+				else {
+					$this->logger->warning( sprintf( __( 'Could not find the parent for term #%d', 'wordpress-importer' ),
+						$term_id,
+						$parent_term_slug
+					) );
+				}
+			}
 
-			default:
-				// Cannot handle this.
-				return;
+			// Do we have updates to make?
+			if ( empty ( $data ) ) {
+				continue;
+			}
+
+			// Run the update
+			$result = wp_update_term( $term_id, $term->taxonomy, $data );
+			if ( empty( $result ) ) {
+				$this->logger->warning( sprintf( __( 'Cound not update term #%d with mapped data', 'wordpress-importer' ),
+					$term_id
+				) );
+				continue;
+			}
+
+			// Clear out our temporary meta keys
+			delete_term_meta( $term_id, '_wxr_import_parent' );
 		}
-
-		if ( ! empty( $menu_object ) ) {
-			update_post_meta( $post_id, '_menu_item_object_id', wp_slash( $menu_object ) );
-		} else {
-			$this->logger->warning( sprintf(
-				__( 'Could not find the menu object for "%s" (post #%d)', 'wordpress-importer' ),
-				get_the_title( $post_id ),
-				$post_id
-			) );
-			$this->logger->debug( sprintf(
-				__( 'Post %d was imported with object "%d" of type "%s", but could not be found', 'wordpress-importer' ),
-				$post_id,
-				$menu_object_id,
-				$menu_item_type
-			) );
-		}
-
-		delete_post_meta( $post_id, '_wxr_import_menu_item' );
 	}
-
 
 	protected function post_process_comments( $todo ) {
 		foreach ( $todo as $comment_id => $_ ) {
@@ -2256,7 +2353,7 @@ class WXR_Importer extends WP_Importer {
 			return $this->exists['term'][ $exists_key ];
 		}
 
-		// Still nothing, try comment_exists, and cache it
+		// Still nothing, try WP's term_exists, and cache it
 		$exists = term_exists( $data['slug'], $data['taxonomy'] );
 		if ( is_array( $exists ) ) {
 			$exists = $exists['term_id'];

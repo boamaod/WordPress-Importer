@@ -64,7 +64,7 @@ class WXR_Import_UI {
 	 * @param int $step Go to step rather than start.
 	 */
 	protected function get_url( $step = 0 ) {
-		$path = 'admin.php?import=wordpress';
+		$path = 'admin.php?import=wordpress-v2';
 		if ( $step ) {
 			$path = add_query_arg( 'step', (int) $step, $path );
 		}
@@ -242,6 +242,15 @@ class WXR_Import_UI {
 			return new WP_Error( 'wxr_importer.upload.no_file', $message, $file );
 		}
 
+		// transform WXR 1.0, 1.1 and 1.2 instances into WXR 1.3 instances
+		require_once __DIR__ . '/class-wxr-transform.php';
+		$transform_wxr = new Transform_WXR();
+		if ( is_wp_error( $transform_wxr ) ) {
+			$message = __( 'Could not create WXR transformer', 'wordpress-importer' );
+			return new WP_Error( 'wxr_importer.upload.transformer', $message, $file );
+		}
+		$transform_wxr->transform( $file['file'] );
+
 		$this->id = (int) $file['id'];
 		return true;
 	}
@@ -292,6 +301,22 @@ class WXR_Import_UI {
 
 			wp_die();
 		}
+
+		// transform WXR 1.0, 1.1 and 1.2 instances into WXR 1.3 instances
+		require_once __DIR__ . '/class-wxr-transform.php';
+		$transform_wxr = new Transform_WXR();
+		if ( is_wp_error( $transform_wxr ) ) {
+			echo wp_json_encode( array(
+				'success' => false,
+				'data'    => array(
+					'message'  => __( 'Could not create WXR transformer.', 'wordpress-importer' ),
+					'filename' => $filename,
+				),
+			) );
+
+			exit;
+		}
+		$transform_wxr->transform( $file['file'] );
 
 		$attachment = wp_prepare_attachment_for_js( $file['id'] );
 		if ( ! $attachment ) {

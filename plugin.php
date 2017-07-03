@@ -1,9 +1,9 @@
 <?php
 /*
 Plugin Name: WordPress Importer v2
-Plugin URI: http://wordpress.org/extend/plugins/wordpress-importer/
+Plugin URI: https://github.com/pbiron/WordPress-Importer
 Description: Import posts, pages, comments, custom fields, categories, tags and more from a WordPress export file.
-Author: wordpressdotorg, rmccue
+Author: wordpressdotorg, rmccue, pbiron
 Author URI: http://wordpress.org/
 Version: 2.0
 Text Domain: wordpress-importer
@@ -36,13 +36,13 @@ function wpimportv2_init() {
 	 */
 	$GLOBALS['wxr_importer'] = new WXR_Import_UI();
 	register_importer(
-		'wordpress',
+		'wordpress-v2',
 		'WordPress (v2)',
 		__( 'Import <strong>posts, pages, comments, custom fields, categories, and tags</strong> from a WordPress export (WXR) file.', 'wordpress-importer' ),
 		array( $GLOBALS['wxr_importer'], 'dispatch' )
 	);
 
-	add_action( 'load-importer-wordpress', array( $GLOBALS['wxr_importer'], 'on_load' ) );
+	add_action( 'load-importer-wordpress-v2', array( $GLOBALS['wxr_importer'], 'on_load' ) );
 	add_action( 'wp_ajax_wxr-import', array( $GLOBALS['wxr_importer'], 'stream_import' ) );
 }
 add_action( 'admin_init', 'wpimportv2_init' );
