@@ -27,14 +27,14 @@ is able to export native [WXR 1.3-proposed][] instances.
 
 [WordPress Importer]: https://wordpress.org/plugins/wordpress-importer/
 [WordPress Importer Redux]: https://github.com/humanmade/WordPress-Importer
-[WordPress Exporter Redux]: https://github.com/pbiron/WordPress-Exporter
+[WordPress Exporter Redux]: https://github.com/pbiron/wordpress-exporter-v2
 [WXR 1.3-proposed]: https://github.com/pbiron/wxr/1.3-proposed
 
 ## How do I use it?
 
 ### Via the Dashboard
 
-1. Install the plugin directly from GitHub. ([Download as a ZIP](https://github.com/pbiron/WordPress-Importer/archive/master.zip))
+1. Install the plugin directly from GitHub. ([Download as a ZIP](archive/master.zip))
 2. Activate the plugin (make sure you also deactivate the original Wordpress Importer if you have it installed).
 3. Head to Tools &rarr; Import
 4. Select "WordPress (v2)"
