@@ -59,6 +59,8 @@ The current major items are currently missing or suboptimal in the Importer:
 1. UI to inform user performing the import that the WXR instance contains extension markup produced
    by plugins and to give them the opportunity to install/activate those plugins before starting the import
 1. Hooks to allow plugins to process/import extension markup in the WXR instance
+   1. As of version 2.0.2, provisional hooks have been added for extension markup at
+   	the `/rss/channel/item` level.
 
 ## How can I help?
 

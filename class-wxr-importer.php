@@ -325,7 +325,48 @@ class WXR_Importer extends WP_Importer {
 							break;
 						}
 
-						$this->process_post( $parsed['data'], $parsed['meta'], $parsed['comments'], $parsed['terms'] );
+						$post_id = $this->process_post( $parsed['data'], $parsed['meta'], $parsed['comments'], $parsed['terms'] );
+
+						if ( ! is_int( $post_id ) ) {
+							continue;
+						}
+
+						/**
+						 * Post parsing completed.
+						 *
+						 * @param array parsed {
+						 *     @type array $data
+						 *     @type array $meta
+						 *     @type array $comments
+						 *     @type array $terms
+						 *     @type array $extension_elements
+						 * }
+						 * @param DOMNode $node The DOM node for the post.
+						 *
+						 * @todo improve this docblock
+						 */
+						do_action( 'wxr_importer.parsed.post', $post_id, $parsed, $node );
+
+						$extension_elements = $parsed['extension_elements'];
+						unset( $parsed['extension_elements'] ) ;
+						foreach ( $extension_elements as $namespaceURI => $elements ) {
+							/**
+							 * Post parsing completed.
+							 *
+							 * The dynamic part of the hook is the namespaceURI for extension elements
+							 *
+							 * @param array parsed {
+							 *     @type array $data
+							 *     @type array $meta
+							 *     @type array $comments
+							 *     @type array $terms
+							 * }
+							 * @param DOMNode $node The DOM node for the post.
+							 *
+							 * @todo improve this docblock
+							 */
+							do_action( "wxr_importer.parsed.post.{$namespaceURI}", $post_id, $elements, $parsed, $node );
+						}
 
 						// Handled everything in this node, move on to the next
 						$reader->next();
@@ -543,6 +584,7 @@ class WXR_Importer extends WP_Importer {
 		$meta = array();
 		$comments = array();
 		$terms = array();
+		$extension_elements = array();
 
 		foreach ( $node->childNodes as $child ) {
 			// We only care about child elements
@@ -554,13 +596,6 @@ class WXR_Importer extends WP_Importer {
 			// unlike in XMLReader, which represents it as '', so the tests below
 			// to find standard RSS elements are different than those in get_preliminary_information()
 			// and import()
-
-			// skip element if it's namespaceURI is not one we care about
-			if ( ! ( is_null( $child->namespaceURI ) || self::WXR_NAMESPACE_URI === $child->namespaceURI ||
-					in_array( $child->namespaceURI,
-						array( self::DUBLIN_CORE_NAMESPACE_URI, self::RSS_CONTENT_NAMESPACE_URI ) ) ) ) {
-				continue;
-			}
 
 			if ( self::WXR_NAMESPACE_URI === $child->namespaceURI ) {
 				switch ( $child->localName ) {
@@ -618,7 +653,7 @@ class WXR_Importer extends WP_Importer {
 						break;
 				}
 			}
-			else {
+			elseif ( is_null( $child->namespaceURI ) ) {
 				// handle elements in the empty namespace, i.e., standard RSS elements
 				switch ( $child->localName ) {
 					case 'title':
@@ -634,6 +669,13 @@ class WXR_Importer extends WP_Importer {
 						}
 						break;
 				}
+			}
+			else {
+				// element in an extension namespace
+				if ( ! isset( $extension_elements[$child->namespaceURI] ) ) {
+					$extension_elements[$child->namespaceURI] = array();
+				}
+				$extension_elements[$child->namespaceURI][] = $child;
 			}
 		}
 
@@ -660,7 +702,7 @@ class WXR_Importer extends WP_Importer {
 		);
 		$data = $this->remap_xml_keys( $data, $allowed );
 
-		return compact( 'data', 'meta', 'comments', 'terms' );
+		return compact( 'data', 'meta', 'comments', 'terms', 'extension_elements' );
 	}
 
 	protected function parse_term_node( $node, $type = 'term' ) {
@@ -1215,7 +1257,7 @@ class WXR_Importer extends WP_Importer {
 
 		// Have we already processed this?
 		if ( isset( $this->mapping['post'][ $original_id ] ) ) {
-			return;
+			return $this->mapping['post'][ $original_id ];
 		}
 
 		$post_type_object = get_post_type_object( $data['post_type'] );
@@ -1248,7 +1290,7 @@ class WXR_Importer extends WP_Importer {
 			// Even though this post already exists, new comments might need importing
 			$this->process_comments( $comments, $original_id, $data, $post_exists );
 
-			return false;
+			return $post_exists;
 		}
 
 		// Map the parent post, or mark it as one we need to fix
@@ -1355,7 +1397,7 @@ class WXR_Importer extends WP_Importer {
 			 * @param array $terms Raw term data, already processed.
 			 */
 			do_action( 'wxr_importer.process_failed.post', $post_id, $data, $meta, $comments, $terms );
-			return false;
+			return $post_id;
 		}
 
 		// Ensure stickiness is handled correctly too
@@ -1421,6 +1463,8 @@ class WXR_Importer extends WP_Importer {
 		 * @param array $terms Raw term data, already processed.
 		 */
 		do_action( 'wxr_importer.processed.post', $post_id, $data, $meta, $comments, $terms );
+
+		return $post_id;
 	}
 
 	/**
@@ -2239,12 +2283,12 @@ class WXR_Importer extends WP_Importer {
 		$exists_key = $data['guid'];
 
 		if ( $this->options['prefill_existing_posts'] ) {
-			return isset( $this->exists['post'][ $exists_key ] ) ? $this->exists['post'][ $exists_key ] : false;
+			return isset( $this->exists['post'][ $exists_key ] ) ? (int) $this->exists['post'][ $exists_key ] : false;
 		}
 
 		// No prefilling, but might have already handled it
 		if ( isset( $this->exists['post'][ $exists_key ] ) ) {
-			return $this->exists['post'][ $exists_key ];
+			return (int) $this->exists['post'][ $exists_key ];
 		}
 
 		// Still nothing, try post_exists, and cache it
