@@ -1,15 +1,15 @@
 <?php
 /*
 Plugin Name: WordPress Importer v2
-Plugin URI: https://github.com/pbiron/WordPress-Importer
+Plugin URI: https://github.com/pbiron/wordpress-importer-v2
 Description: Import posts, pages, comments, custom fields, categories, tags and more from a WordPress export file.
-Author: wordpressdotorg, rmccue, pbiron
+Author: wordpressdotorg, rmccue, Paul V. Biron/Sparrow Hawk Computing
 Author URI: http://wordpress.org/
 Version: 2.0.2
 Text Domain: wordpress-importer
 License: GPLv2
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
-GitHub Plugin URI: https://github.com/pbiron/WordPress-Importer
+GitHub Plugin URI: https://github.com/pbiron/wordpress-importer-v2
 */
 
 if ( ! class_exists( 'WP_Importer' ) ) {

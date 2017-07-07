@@ -72,8 +72,8 @@ class WXR_Tests_Namespace_Aware_Import extends WXR_Import_UnitTestCase {
 
 	/**
 	 * this is the same as test_small_import() except that the WXR file to be
-	 * imported was exported using https://github.com/pbiron/WordPress-Exporter
-	 * the plugin at https://github.com/pbiron/WordPress-Exporter-extension
+	 * imported was exported using https://github.com/pbiron/wordpress-exporter-v2
+	 * the plugin at https://github.com/pbiron/wordpress-exporter-v2-extension
 	 * was also active during that export, thus there is extension markup
 	 * in the WXR instance.
 	 *
