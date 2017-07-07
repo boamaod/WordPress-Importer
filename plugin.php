@@ -5,9 +5,11 @@ Plugin URI: https://github.com/pbiron/WordPress-Importer
 Description: Import posts, pages, comments, custom fields, categories, tags and more from a WordPress export file.
 Author: wordpressdotorg, rmccue, pbiron
 Author URI: http://wordpress.org/
-Version: 2.0
+Version: 2.0.2
 Text Domain: wordpress-importer
-License: GPL version 2 or later - http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+License: GPLv2
+License URI: http://www.gnu.org/licenses/gpl-2.0.html
+GitHub Plugin URI: https://github.com/pbiron/WordPress-Importer
 */
 
 if ( ! class_exists( 'WP_Importer' ) ) {
