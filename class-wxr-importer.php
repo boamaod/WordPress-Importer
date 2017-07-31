@@ -161,7 +161,15 @@ class WXR_Importer extends WP_Importer {
 		// Start parsing!
 		$data = new WXR_Import_Info();
 
+		$extension_namespaces = array();
+
 		while ( $reader->read() ) {
+			if ( XMLReader::PI == $reader->nodeType && 'WXR_Importer' === $reader->localName ) {
+				if ( preg_match( "/^namespace-uri='([^']+)'\s+name='([^']+)'\s+slug='([^']+)'\s+url='([^']+)'\$/", $reader->value, $matches) !== false ) {
+					$data->extension_namespaces[$matches[1]][] = array( 'name' => $matches[2], 'slug' => $matches[3], 'url' => $matches[4] );
+				}
+			}
+
 			// Only deal with element opens
 			if ( $reader->nodeType !== XMLReader::ELEMENT ) {
 				continue;
