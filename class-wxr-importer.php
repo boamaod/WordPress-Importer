@@ -220,7 +220,7 @@ class WXR_Importer extends WP_Importer {
 						break;
 
 					case 'generator':
-						$data->generator = $reader->readString();
+						$data->generator = $reader->getAttributeNs( 'wp_version', self::WXR_NAMESPACE_URI );
 						$reader->next();
 						break;
 
