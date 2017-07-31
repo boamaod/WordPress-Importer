@@ -175,19 +175,20 @@ class Transform_WXR {
 
 			$writer->startElement( $reader->localName );
 
+			if ( 'generator' === $reader->localName ) {
+				$wp_version = $reader->readString();
+				$wp_version = substr( $wp_version, stripos( $wp_version, '?v=' ) + 3 );
+				$writer->writeAttributeNS( 'wxr', 'wp_version', null, $wp_version );
+
+				$writer->endElement();
+				$reader->next();
+			}
+
 			if ( 'rss' === $reader->localName && 0 === $reader->depth ) {
 				if ( $reader->moveToAttributeNS( 'version', self::WXR_NAMESPACE_URI ) ) {
 					// file is already in the WXR 1.3 (or later) markup, no need to transform
 					return false;
 				}
-// 				$version = $reader->getAttributeNs( 'version', self::WXR_NAMESPACE_URI );
-// 				if ( self::WXR_VERSION === $version ) {
-// 					// file is already in the WXR 1.3 markup, no need to transform
-// 					return false;
-// 				}
-// 				elseif ( version_compare( $version, self::MAX_WXR_VERSION, '>' ) ) {
-
-// 				}
 
 				// passing the WXR namespaceURI here will cause XMLWriter to also
 				// generate a namespace decl for it.  After this, we always pass
