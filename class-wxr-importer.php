@@ -143,6 +143,14 @@ class WXR_Importer extends WP_Importer {
 			return new WP_Error( 'wxr_importer.cannot_parse', __( 'Could not open the file for parsing', 'wordpress-importer' ) );
 		}
 
+		// @todo develop stategy for dealing with libxml errors
+		// for example, what should we do in $this->parse_post_node() if $reader->read()
+		// returns false because there is a non-well-formed error?
+		// currently it returns whatever $data it has collected to that point.
+		// I *think* we should punt and abort the import completely because
+		// every future call to $reader->read() will return false.
+//		libxml_use_internal_errors( true );
+
 		return $reader;
 	}
 
