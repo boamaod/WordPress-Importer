@@ -236,6 +236,11 @@ class WXR_Importer extends WP_Importer {
 						$data->title = $reader->readString();
 						$reader->next();
 						break;
+
+					case 'link':
+						$data->home = $reader->readString();
+						$reader->next();
+						break;
 				}
 			}
 			elseif ( self::WXR_NAMESPACE_URI === $reader->namespaceURI ) {
