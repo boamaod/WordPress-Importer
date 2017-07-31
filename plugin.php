@@ -12,6 +12,10 @@ License URI: http://www.gnu.org/licenses/gpl-2.0.html
 GitHub Plugin URI: https://github.com/pbiron/wordpress-importer-v2
 */
 
+/*
+ * @todo UI should inform user of the custom taxonomies of terms to be imported
+ */
+
 if ( ! class_exists( 'WP_Importer' ) ) {
 	defined( 'WP_LOAD_IMPORTERS' ) || define( 'WP_LOAD_IMPORTERS', true );
 	require ABSPATH . '/wp-admin/includes/class-wp-importer.php';
