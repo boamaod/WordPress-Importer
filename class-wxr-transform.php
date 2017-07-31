@@ -139,7 +139,7 @@ class Transform_WXR {
 			// element is from one of the old WXR namespaces
 
 			if ( in_array( $reader->localName, array( 'wxr_version', 'base_blog_url' ) ) ) {
-				// skip the old wp:wxr_version element
+				// skip the old wp:wxr_version & base_blog_url elements
 				$reader->next();
 
 				return true;
