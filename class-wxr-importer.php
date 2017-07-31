@@ -233,15 +233,15 @@ class WXR_Importer extends WP_Importer {
 						break;
 
 					case 'title':
-						$data->title = $reader->value;
+						$data->title = $reader->readString();
 						$reader->next();
 						break;
 				}
 			}
 			elseif ( self::WXR_NAMESPACE_URI === $reader->namespaceURI ) {
 				switch ( $reader->localName ) {
-					case 'base_site_url':
-						$data->siteurl = $reader->value;
+					case 'site_url':
+						$data->siteurl = $reader->readString();
 						$reader->next();
 						break;
 
@@ -396,7 +396,7 @@ class WXR_Importer extends WP_Importer {
 			elseif ( self::WXR_NAMESPACE_URI === $reader->namespaceURI ) {
 				switch ( $reader->localName ) {
 					case 'site_url':
-						$this->base_url = $reader->value;
+						$this->site_url = $reader->readString();
 
 						// Handled everything in this node, move on to the next
 						$reader->next();
