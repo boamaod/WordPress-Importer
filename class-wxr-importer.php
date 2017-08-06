@@ -173,7 +173,7 @@ class WXR_Importer extends WP_Importer {
 
 		while ( $reader->read() ) {
 			if ( XMLReader::PI == $reader->nodeType && 'WXR_Importer' === $reader->localName ) {
-				if ( preg_match( "/^namespace-uri='([^']+)'\s+name='([^']+)'\s+slug='([^']+)'\s+url='([^']+)'\$/", $reader->value, $matches) !== false ) {
+				if ( preg_match( "/^namespace-uri='([^']+)'\s+plugin-name='([^']+)'\s+plugin-slug='([^']+)'\s+plugin-url='([^']+)'\s+\$/", $reader->value, $matches) > 0 ) {
 					$data->extension_namespaces[$matches[1]][] = array( 'name' => $matches[2], 'slug' => $matches[3], 'url' => $matches[4] );
 				}
 			}
