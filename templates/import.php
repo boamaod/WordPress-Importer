@@ -26,6 +26,11 @@ $script_data = array(
 // neither IE10-11 nor Edge understand EventSource, so enqueue a polyfill
 wp_enqueue_script( 'eventsource-polyfill', plugins_url( 'assets/eventsource-polyfill.js', dirname( __FILE__ ) ), array(), '20160909', true );
 
+// DataTables allows the log messages to sorted/paginated
+$suffix = defined ('SCRIPT_DEBUG') && SCRIPT_DEBUG ? '' : '.min' ;
+wp_enqueue_script( 'jquery.dataTables', plugins_url( "assets/jquery.dataTables/jquery.dataTables$suffix.js", dirname( __FILE__ ) ), array( 'jquery' ), '20160909', true );
+wp_enqueue_style( 'jquery.dataTables', plugins_url( 'assets/jquery.dataTables/jquery.dataTables.css', dirname( __FILE__ ) ), array(), '20160909' );
+
 $url = plugins_url( 'assets/import.js', dirname( __FILE__ ) );
 wp_enqueue_script( 'wxr-importer-import', $url, array( 'jquery' ), '20160909', true );
 wp_localize_script( 'wxr-importer-import', 'wxrImportData', $script_data );
@@ -159,14 +164,13 @@ $this->render_header();
 <table id="import-log" class="widefat">
 	<thead>
 		<tr>
-			<th><?php esc_html_e( 'Type', 'wordpress-importer' ) ?></th>
+			<th class='type'><?php esc_html_e( 'Type', 'wordpress-importer' ) ?></th>
 			<th><?php esc_html_e( 'Message', 'wordpress-importer' ) ?></th>
 		</tr>
 	</thead>
 	<tbody>
 	</tbody>
 </table>
-
 <?php
 
 $this->render_footer();
