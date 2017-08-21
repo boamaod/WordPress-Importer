@@ -68,7 +68,14 @@
 		var data = JSON.parse( message.data );
 
 		// add row to the table, allowing DataTable to keep rows sorted by log-level
-		$( '#import-log' ).dataTable().fnAddData( [data.level, data.message] );
+		// add row to the table, allowing DataTable to keep rows sorted by log-level
+		var table = $('#import-log').DataTable();
+		var rowNode = table
+			.row.add( [data.level, data.message] )
+			.draw()
+			.node();
+	 
+		$( rowNode ).addClass( data.level );
 	});
 
 	// sorting/pagination of log messages, using the DataTables jquery plugin

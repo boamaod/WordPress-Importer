@@ -23,9 +23,35 @@
 	margin-bottom: 6px;
 }
 
+#import-log {
+	border-collapse: collapse;
+}
+
 #import-log tbody {
 	max-height: 40em;
 }
+
+#import-log tr
+{
+	border-left: 4px solid transparent;
+}
+
+#import-log tbody tr.info
+{
+	border-left-color: #46b450;
+}
+
+#import-log tbody tr.warning,
+#import-log tbody tr.notice
+{
+	border-left-color: #ffb900;
+}
+
+#import-log tbody tr.error
+{
+	border-left-color: #dc3232;
+}
+
 .import-status-indicator {
 	margin-bottom: 1em;
 }
