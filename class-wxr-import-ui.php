@@ -514,6 +514,7 @@ class WXR_Import_UI {
 		add_action( 'wxr_importer.process_already_imported.term', array( $this, 'imported_term' ) );
 		add_action( 'wxr_importer.processed.user', array( $this, 'imported_user' ) );
 		add_action( 'wxr_importer.process_failed.user', array( $this, 'imported_user' ) );
+		add_action( 'wxr_importer.process_skipped.user', array( $this, 'already_imported_user' ), 10, 2 );
 		add_action( 'wxr_importer.processed.link', array( $this, 'imported_link' ) );
 		add_action( 'wxr_importer.process_failed.link', array( $this, 'imported_link' ) );
 		add_action( 'wxr_importer.process_already_imported.link', array( $this, 'imported_link' ) );
@@ -782,6 +783,19 @@ class WXR_Import_UI {
 	 * Send message when a user has been imported.
 	 */
 	public function imported_user() {
+		$this->emit_sse_message( array(
+			'action' => 'updateDelta',
+			'type'   => 'users',
+			'delta'  => 1,
+		));
+	}
+
+	/**
+	 * Send message when a user is marked as already imported.
+	 *
+	 * @param array $data User data saved to the DB.
+	 */
+	public function already_imported_user( $data ) {
 		$this->emit_sse_message( array(
 			'action' => 'updateDelta',
 			'type'   => 'users',
