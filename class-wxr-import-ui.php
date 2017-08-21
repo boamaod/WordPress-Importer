@@ -514,6 +514,9 @@ class WXR_Import_UI {
 		add_action( 'wxr_importer.process_already_imported.term', array( $this, 'imported_term' ) );
 		add_action( 'wxr_importer.processed.user', array( $this, 'imported_user' ) );
 		add_action( 'wxr_importer.process_failed.user', array( $this, 'imported_user' ) );
+		add_action( 'wxr_importer.processed.link', array( $this, 'imported_link' ) );
+		add_action( 'wxr_importer.process_failed.link', array( $this, 'imported_link' ) );
+		add_action( 'wxr_importer.process_already_imported.link', array( $this, 'imported_link' ) );
 
 		// Clean up some memory
 		unset( $settings );
@@ -782,6 +785,17 @@ class WXR_Import_UI {
 		$this->emit_sse_message( array(
 			'action' => 'updateDelta',
 			'type'   => 'users',
+			'delta'  => 1,
+		));
+	}
+
+	/**
+	 * Send message when a term has been imported.
+	 */
+	public function imported_link() {
+		$this->emit_sse_message( array(
+			'action' => 'updateDelta',
+			'type'   => 'links',
 			'delta'  => 1,
 		));
 	}

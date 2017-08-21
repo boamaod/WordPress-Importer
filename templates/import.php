@@ -16,6 +16,7 @@ $script_data = array(
 		'users' => count( $data->users ),
 		'comments' => $data->comment_count,
 		'terms' => $data->term_count,
+		'links' => $data->link_count,
 	),
 	'url' => $url,
 	'strings' => array(
@@ -144,6 +145,24 @@ $this->render_header();
 					<td>
 						<progress id="progressbar-terms" max="100" value="0"></progress>
 						<span id="progress-terms" class="progress">0%</span>
+					</td>
+				</tr>
+				<tr>
+					<td>
+						<span class="dashicons dashicons-admin-links"></span>
+						<?php
+						echo esc_html( sprintf(
+							_n( '%d link', '%d links', $data->link_count, 'wordpress-exporter' ),
+							$data->link_count
+						));
+						?>
+					</td>
+					<td>
+						<span id="completed-links" class="completed">0/0</span>
+					</td>
+					<td>
+						<progress id="progressbar-links" max="100" value="0"></progress>
+						<span id="progress-links" class="progress">0%</span>
 					</td>
 				</tr>
 			</tbody>

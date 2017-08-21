@@ -6,6 +6,7 @@
 			users: 0,
 			comments: 0,
 			terms: 0,
+			links: 0,
 		},
 
 		updateDelta: function (type, delta) {

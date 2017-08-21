@@ -108,6 +108,7 @@ class WXR_Importer extends WP_Importer {
 			'prefill_existing_posts'    => true,
 			'prefill_existing_comments' => true,
 			'prefill_existing_terms'    => true,
+			'prefill_existing_links'    => true,
 			'update_attachment_guids'   => false,
 			'fetch_attachments'         => false,
 			'aggressive_url_search'     => false,
@@ -270,6 +271,13 @@ class WXR_Importer extends WP_Importer {
 
 					case 'term':
 						$data->term_count++;
+
+						// Handled everything in this node, move on to the next
+						$reader->next();
+						break;
+
+					case 'link':
+						$data->link_count++;
 
 						// Handled everything in this node, move on to the next
 						$reader->next();
@@ -441,6 +449,24 @@ class WXR_Importer extends WP_Importer {
 						}
 
 						$status = $this->process_term( $parsed['data'], $parsed['meta'] );
+
+						// Handled everything in this node, move on to the next
+						$reader->next();
+						break;
+
+					case 'link':
+						$node = $reader->expand();
+
+						$parsed = $this->parse_link_node( $node );
+						if ( is_wp_error( $parsed ) ) {
+							$this->log_error( $parsed );
+
+							// Skip the rest of this post
+							$reader->next();
+							break;
+						}
+
+						$status = $this->process_link( $parsed['data'], $parsed['cats'] );
 
 						// Handled everything in this node, move on to the next
 						$reader->next();
@@ -819,6 +845,64 @@ class WXR_Importer extends WP_Importer {
 		return compact( 'data', 'meta' );
 	}
 
+
+	protected function parse_link_node( $node ) {
+		$data = $cats = array();
+
+		foreach ( $node->childNodes as $child ) {
+			// We only care about child elements
+			if ( $child->nodeType !== XML_ELEMENT_NODE ) {
+				continue;
+			}
+
+			if ( self::WXR_NAMESPACE_URI !== $child->namespaceURI ) {
+				continue;
+			}
+
+			switch ( $child->localName ) {
+				case 'id':
+				case 'url':
+				case 'name':
+				case 'image':
+				case 'target':
+				case 'description':
+				case 'visible':
+				case 'owner':
+				case 'rating':
+				case 'updated':
+				case 'rel':
+				case 'notes':
+				case 'rss':
+					$data[ $child->localName ] = $child->textContent;
+					break;
+
+				case 'category':
+					$cats[] = $child->textContent;
+			}
+		}
+
+
+		// remap from XML element names to what $this->process_post() expects
+		$allowed = array(
+			'id' => 'link_id',
+			'url' => 'link_url',
+			'name' => 'link_name',
+			'image' => 'link_image',
+			'target' => 'link_target',
+			'description' => 'link_description',
+			'visibile' => 'link_visible',
+			'owner' => 'link_owner',
+			'rating' => 'link_rating',
+			'updated' => 'link_updated',
+			'rel' => 'link_rel',
+			'notes' => 'link_notes',
+			'rss' => 'link_rss',
+		);
+		$data = $this->remap_xml_keys( $data, $allowed );
+
+		return compact( 'data', 'cats' );
+	}
+
 	/**
 	 * Log an error instance to the logger.
 	 *
@@ -858,6 +942,9 @@ class WXR_Importer extends WP_Importer {
 		}
 		if ( $this->options['prefill_existing_terms'] ) {
 			$this->prefill_existing_terms();
+		}
+		if ( $this->options['prefill_existing_links'] ) {
+			$this->prefill_existing_links();
 		}
 
 		// @todo this is redundant if we are run from within the admin UI
@@ -1571,6 +1658,11 @@ class WXR_Importer extends WP_Importer {
 		$mapping_key = sha1( $data['taxonomy'] . ':' . $data['slug'] );
 		$existing = $this->term_exists( $data );
 		if ( $existing ) {
+			$this->logger->notice( sprintf(
+				__( 'Term "%s" (%s) already exists', 'wordpress-importer' ),
+				$data['name'],
+				$data['taxonomy']
+			) );
 
 			/**
 			 * Term processing already imported.
@@ -1766,6 +1858,19 @@ class WXR_Importer extends WP_Importer {
  				$this->mapping['user_slug'][ $original_slug ] = $existing;
  			}
 
+			$this->logger->notice( sprintf(
+				__( 'Skipped importing user "%s"', 'wordpress-importer' ),
+				$data['user_login']
+			) );
+
+			/**
+			 * User processing completed.
+			 *
+			 * @param int $user_id New user ID.
+			 * @param array $userdata Raw data imported for the user.
+			 */
+			do_action( 'wxr_importer.processed.user', $user_id, $userdata );
+
 			return false;
 		}
 
@@ -1848,12 +1953,174 @@ class WXR_Importer extends WP_Importer {
 	}
 
 	/**
- 	 * Process and import a user.
- 	 *
-	 * @param array $data
-	 * @param array $meta
-	 * @return bool
+	 * Create new posts based on import information
+	 *
+	 * Posts marked as having a parent which doesn't exist will become top level items.
+	 * Doesn't create a new post if: the post type doesn't exist, the given post ID
+	 * is already noted as imported or a post with the same title and date already exists.
+	 * Note that new/updated terms, comments and meta are imported for the last of the above.
 	 */
+	protected function process_link( $data, $link_categories ) {
+		/**
+		 * Pre-process post data.
+		 *
+		 * @param array $data Post data. (Return empty to skip.)
+		 * @param array $meta Meta data.
+		 * @param array $comments Comments on the post.
+		 * @param array $terms Terms on the post.
+		 */
+		$data = apply_filters( 'wxr_importer.pre_process.link', $data );
+		if ( empty( $data ) ) {
+			return false;
+		}
+
+		$original_id = isset( $data['link_id'] )    ? (int) $data['link_id']    : 0;
+		$author_id   = isset( $data['link_owner'] ) ? (int) $data['link_owner'] : 0;
+
+		// Have we already processed this?
+		if ( isset( $this->mapping['link'][ $original_id ] ) ) {
+			return $this->mapping['link'][ $original_id ];
+		}
+
+		$link_exists = $this->link_exists( $data );
+		if ( $link_exists ) {
+			$this->logger->notice( sprintf(
+				__( 'Link "%s" already exists.', 'wordpress-importer' ),
+				$data['link_name']
+			) );
+
+			/**
+			 * Post processing already imported.
+			 *
+			 * @param array $data Raw data imported for the post.
+			 */
+			do_action( 'wxr_importer.process_already_imported.link', $data );
+
+			return $link_exists;
+		}
+
+		// Map the parent post, or mark it as one we need to fix
+		$requires_remapping = false;
+
+		// Map the author, or mark it as one we need to fix
+		$author = sanitize_user( $data['link_owner'], true );
+		if ( empty( $author ) ) {
+			// Missing or invalid author, use default if available.
+			$data['link_owner'] = $this->options['default_author'];
+ 		} elseif ( isset( $this->mapping['user_slug'][ $author ] ) ) {
+ 			$data['link_owner'] = $this->mapping['user_slug'][ $author ];
+		} else {
+			$requires_remapping = true;
+
+			$data['link_owner'] = (int) get_current_user_id();
+		}
+
+		// Whitelist to just the keys we allow
+		$linkdata = array(
+			'import_id' => $data['link_id'],
+		);
+		$allowed = array(
+			'link_url'    => true,
+			'link_name'      => true,
+			'link_image'  => true,
+			'link_description'   => true,
+			'link_visible'   => true,
+			'link_owner'     => true,
+			'link_rating'    => true,
+			'link_updated'      => true,
+			'link_rel' => true,
+			'link_notes'    => true,
+			'link_rss'           => true,
+		);
+		foreach ( $data as $key => $value ) {
+			if ( ! isset( $allowed[ $key ] ) ) {
+				continue;
+			}
+
+			$linkdata[ $key ] = $data[ $key ];
+		}
+
+		$linkdata = apply_filters( 'wp_import_link_data_processed', $linkdata, $data );
+
+		$link_id = wp_insert_link( $linkdata, true );
+		do_action( 'wp_import_insert_link', $link_id, $original_id, $linkdata, $data );
+
+		if ( is_wp_error( $link_id ) ) {
+			$this->logger->error( sprintf(
+				__( 'Failed to import link "%s"', 'wordpress-importer' ),
+				$data['link_name']
+			) );
+			$this->logger->debug( $link_id->get_error_message() );
+
+			/**
+			 * Post processing failed.
+			 *
+			 * @param WP_Error $post_id Error object.
+			 * @param array $data Raw data imported for the post.
+			 * @param array $meta Raw meta data, already processed by {@see process_post_meta}.
+			 * @param array $comments Raw comment data, already processed by {@see process_comments}.
+			 * @param array $terms Raw term data, already processed.
+			 */
+			do_action( 'wxr_importer.process_failed.link', $link_id, $data );
+
+			return $link_id;
+		}
+
+		// map pre-import ID to local ID
+		$this->mapping['link'][ $original_id ] = (int) $link_id;
+		if ( $requires_remapping ) {
+			$this->requires_remapping['link'][ $link_id ] = true;
+			set_transient( '_wxr_import_user_slug_' . $link_id, $author );
+		}
+		$this->mark_link_exists( $data, $link_id );
+
+		$this->logger->info( sprintf(
+			__( 'Imported link "%s"', 'wordpress-importer' ),
+			$data['link_name']
+		) );
+		$this->logger->debug( sprintf(
+			__( 'Link %d remapped to %d', 'wordpress-importer' ),
+			$original_id,
+			$link_id
+		) );
+
+		// Handle the terms too
+		$link_categories = apply_filters( 'wp_import_link_terms', $link_categories, $link_id, $data );
+
+		if ( ! empty( $link_categories ) ) {
+			$term_ids = $trans = array();
+			foreach ( $link_categories as $term ) {
+				$key = sha1( 'link_category' . ':' . $term );
+
+				if ( isset( $this->mapping['term'][ $key ] ) ) {
+					$term_ids[] = (int) $this->mapping['term'][ $key ];
+				} else {
+					$trans[] = $term;
+					$this->requires_remapping['link'][ $link_id ] = true;
+				}
+			}
+
+			wp_set_link_cats( $link_id, $term_ids );
+			do_action( 'wp_import_set_link_cats', $term_ids, $link_id, $data );
+
+			if ( ! empty( $trans ) ) {
+				set_transient( '_wxr_import_term_' . $link_id, $trans );
+			}
+		}
+
+		/**
+		 * Post processing completed.
+		 *
+		 * @param int $post_id New post ID.
+		 * @param array $data Raw data imported for the post.
+		 * @param array $meta Raw meta data, already processed by {@see process_post_meta}.
+		 * @param array $comments Raw comment data, already processed by {@see process_comments}.
+		 * @param array $terms Raw term data, already processed.
+		 */
+		do_action( 'wxr_importer.processed.link', $link_id, $data, $link_categories );
+
+		return $link_id;
+	}
 
 	/**
 	 * Process and import a user meta.
@@ -2030,6 +2297,9 @@ class WXR_Importer extends WP_Importer {
 		}
 		if ( ! empty( $this->requires_remapping['term'] ) ) {
 			$this->post_process_terms( $this->requires_remapping['term'] );
+		}
+		if ( ! empty( $this->requires_remapping['link'] ) ) {
+			$this->post_process_links( $this->requires_remapping['link'] );
 		}
 	}
 
@@ -2271,6 +2541,101 @@ class WXR_Importer extends WP_Importer {
 		}
 	}
 
+	protected function post_process_links( $todo ) {
+		global $wpdb;
+
+		foreach ( $todo as $link_id => $_ ) {
+			$this->logger->debug( sprintf(
+				// Note: title intentionally not used to skip extra processing
+				// for when debug logging is off
+				__( 'Running post-processing for link %d', 'wordpress-importer' ),
+				$link_id
+			) );
+
+			$data = array();
+
+			$author_slug = get_transient( '_wxr_import_user_slug_' . $link_id );
+			if ( ! empty( $author_slug ) ) {
+				// Have we imported the user now?
+ 				if ( isset( $this->mapping['user_slug'][ $author_slug ] ) ) {
+ 					$data['link_owner'] = $this->mapping['user_slug'][ $author_slug ];
+				} else {
+					$link_name = $wpdb->get_var( $wpdb->prepare( "SELECT link_name FROM {$wpdb->links} WHERE link_id = %d", $link_id ) );
+					$this->logger->warning( sprintf(
+						__( 'Could not find the author for "%s" (link #%d)', 'wordpress-importer' ),
+						$link_name,
+						$link_id
+					) );
+					$this->logger->debug( sprintf(
+						__( 'Link %d was imported with author "%s", but could not be found', 'wordpress-importer' ),
+						$link_id,
+						$author_slug
+					) );
+				}
+			}
+
+			// Do we have updates to make?
+			if ( empty( $data ) ) {
+				$this->logger->debug( sprintf(
+					__( 'Link %d was marked for post-processing, but none was required.', 'wordpress-importer' ),
+					$link_id
+				) );
+				continue;
+			}
+
+			// Run the update
+			$data['link_id'] = $link_id;
+			$result = wp_update_link( $data );
+			if ( is_wp_error( $result ) ) {
+				$link_name = $wpdb->get_var( $wpdb->prepare( "SELECT link_name FROM {$wpdb->links} WHERE link_id = %d", $link_id ) );
+				$this->logger->warning( sprintf(
+					__( 'Could not update "%s" (link #%d) with mapped data', 'wordpress-importer' ),
+					$link_name,
+					$link_id
+				) );
+				$this->logger->debug( $result->get_error_message() );
+				continue;
+			}
+
+			$link_categories = get_transient( '_wxr_import_term_' . $link_id );
+			if ( ! empty( $link_categories ) ) {
+				$term_ids = array();
+				foreach ( $link_categories as $term ) {
+					// Have we imported the term now?
+					$mapping_key = sha1( 'link_category' . ':' . $term );
+					if ( isset( $this->mapping['term'][ $mapping_key ] ) ) {
+						$term_ids[] = $this->mapping['term'][ $mapping_key ];
+					}
+					// Next, see if the term already exists.
+					elseif ( $term_id = $this->term_exists(
+							array( 'taxonomy' => 'link_category', 'slug' => $term ) ) ) {
+						$term_ids = $term_id;
+					}
+					else {
+						$_term = wp_insert_term( $term, 'link_category' );
+						$term_id = $_term['term_id'];
+						$term_ids[] = $term_id;
+
+						// Add the new term to the mapping array.
+						$this->mapping['term'][ $mapping_key ] = $term_id;
+
+						// Add the new term to the exists array.
+						$this->exists['term'][ $mapping_key ] = $term_id;
+					}
+				}
+
+				if ( ! empty( $term_ids ) ) {
+					wp_set_link_cats( $link_id, $term_ids );
+					do_action( 'wp_import_set_link_terms', $term_ids, $link_id );
+				}
+			}
+
+			// Clear out our temporary meta keys
+			delete_transient( '_wxr_import_user_slug_' . $link_id );
+			delete_transient( '_wxr_import_term_' . $link_id );
+		}
+	}
+
 	/**
 	 * Use stored mapping information to update old attachment URLs
 	 */
@@ -2458,6 +2823,46 @@ class WXR_Importer extends WP_Importer {
 		$this->exists['comment'][ $exists_key ] = $comment_id;
 	}
 
+
+	/**
+	 * Does the comment exist?
+	 *
+	 * @param array $data Comment data to check against.
+	 * @return int|bool Existing comment ID if it exists, false otherwise.
+	 */
+	protected function link_exists( $data ) {
+		$exists_key = sha1( $data['link_name'] . ':' . $data['link_url'] . ':' . $data['link_rel'] );
+
+		// Constant-time lookup if we prefilled
+		if ( $this->options['prefill_existing_links'] ) {
+			return isset( $this->exists['link'][ $exists_key ] ) ? $this->exists['link'][ $exists_key ] : false;
+		}
+
+		// No prefilling, but might have already handled it
+		if ( isset( $this->exists['link'][ $exists_key ] ) ) {
+			return $this->exists['link'][ $exists_key ];
+		}
+
+// 		// Still nothing, try comment_exists, and cache it
+// 		$exists = comment_exists( $data['comment_author'], $data['comment_date'] );
+// 		$this->exists['comment'][ $exists_key ] = $exists;
+
+// 		return $exists;
+
+		return false;
+	}
+
+	/**
+	 * Mark the comment as existing.
+	 *
+	 * @param array $data Comment data to mark as existing.
+	 * @param int $comment_id Comment ID.
+	 */
+	protected function mark_link_exists( $data, $link_id ) {
+		$exists_key = sha1( $data['link_name'] . ':' . $data['link_url'] . ':' . $data['link_rel'] );
+		$this->exists['link'][ $exists_key ] = $link_id;
+	}
+
 	/**
 	 * Prefill existing term data.
 	 *
@@ -2514,5 +2919,20 @@ class WXR_Importer extends WP_Importer {
 	protected function mark_term_exists( $data, $term_id ) {
 		$exists_key = sha1( $data['taxonomy'] . ':' . $data['slug'] );
 		$this->exists['term'][ $exists_key ] = $term_id;
+	}
+
+	/**
+	 * Prefill existing link data.
+	 *
+	 * @see self::prefill_existing_posts() for justification of why this exists.
+	 */
+	protected function prefill_existing_links() {
+		global $wpdb;
+		$links = $wpdb->get_results( "SELECT link_id, link_name, link_url, link_rel FROM {$wpdb->links}" );
+
+		foreach ( $links as $item ) {
+			$exists_key = sha1( $item->link_name . ':' . $item->link_url . ':' . $item->link_rel );
+			$this->exists['link'][ $exists_key ] = $item->link_id;
+		}
 	}
 }

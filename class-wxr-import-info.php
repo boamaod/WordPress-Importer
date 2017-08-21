@@ -11,6 +11,7 @@ class WXR_Import_Info {
 	public $media_count = 0;
 	public $comment_count = 0;
 	public $term_count = 0;
+	public $link_count = 0;
 
 	public $generator = '';
 	public $version;

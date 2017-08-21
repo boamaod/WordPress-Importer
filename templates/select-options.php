@@ -65,6 +65,15 @@ if ( preg_match( '#^http://wordpress\.org/\?v=(\d+\.\d+\.\d+)$#', $generator, $m
 						));
 						?>
 					</li>
+					<li>
+						<span class="dashicons dashicons-admin-links"></span>
+						<?php
+						echo esc_html( sprintf(
+							_n( '%d link', '%d links', $data->link_count, 'wordpress-importer' ),
+							$data->link_count
+						));
+						?>
+					</li>
 				</ul>
 			</div>
 			<div class="welcome-panel-column">
