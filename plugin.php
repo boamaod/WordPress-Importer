@@ -5,7 +5,7 @@ Plugin URI: https://github.com/pbiron/wordpress-importer-v2
 Description: Import posts, pages, comments, custom fields, categories, tags and more from a WordPress export file.
 Author: wordpressdotorg, rmccue, Paul V. Biron/Sparrow Hawk Computing
 Author URI: http://wordpress.org/
-Version: 2.0.3
+Version: 2.1
 Text Domain: wordpress-importer
 License: GPLv2
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
