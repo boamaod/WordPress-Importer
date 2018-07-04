@@ -762,30 +762,35 @@ class WXR_Import_UI {
 	}
 }
 
+// add_action( 'admin_head', function(  ) {
+	
+// 	vl( get_post_meta( get_the_ID(), '_elementor_data', true ) );
+// 	// vl( get_post_meta( get_the_ID() ) );
+// 	wp_die();
+// } );
+// add_action( 'admin_head', function(  ) {
 
-add_action( 'admin_head', function(  ) {
+// 	// $ob = new WXR_Import_UI();
+// 	// $data = $ob->get_data_for_attachment( 1 );
 
-	// $ob = new WXR_Import_UI();
-	// $data = $ob->get_data_for_attachment( 128 );
+// 	$options = array(
+// 		'fetch_attachments' => false,
+// 	);
+// 	$logger = new WP_Importer_Logger_CLI();
+// 	$importer = new WXR_Importer( $options );
+// 	$file = get_attached_file( 1 );
+// 	$importer->set_logger( $logger );
+// 	$result = $importer->import( $file );
+// 	echo '<pre>';
+// 	// print_r( $data );
+// 	print_r( $result );
+// 	wp_die();
 
-	$options = array(
-		'fetch_attachments' => false,
-	);
-	$logger = new WP_Importer_Logger_CLI();
-	$importer = new WXR_Importer( $options );
-	$file = get_attached_file( 128 );
-	$importer->set_logger( $logger );
-	$result = $importer->import( $file );
-	echo '<pre>';
-	print_r( $data );
-	print_r( $result );
-	wp_die();
+// 	// $file = get_attached_file( 1 );
 
-	// $file = get_attached_file( 128 );
-
-	// $importer = $this->get_importer();
-	// $data = $importer->get_preliminary_information( $file );
-	// if ( is_wp_error( $data ) ) {
-	// 	return $data;
-	// }
-} );
+// 	// $importer = $this->get_importer();
+// 	// $data = $importer->get_preliminary_information( $file );
+// 	// if ( is_wp_error( $data ) ) {
+// 	// 	return $data;
+// 	// }
+// } );
