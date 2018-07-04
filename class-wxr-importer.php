@@ -318,6 +318,7 @@ class WXR_Importer extends WP_Importer {
 	 * @param string $file Path to the WXR file for importing
 	 */
 	public function import( $file ) {
+
 		add_filter( 'import_post_meta_key', array( $this, 'is_valid_meta_key' ) );
 		add_filter( 'http_request_timeout', array( &$this, 'bump_request_timeout' ) );
 
@@ -371,7 +372,10 @@ class WXR_Importer extends WP_Importer {
 
 				case 'item':
 					$node = $reader->expand();
+					
 					$parsed = $this->parse_post_node( $node );
+					// vl( '------parsed------' );
+					// vl( $parsed );
 					if ( is_wp_error( $parsed ) ) {
 						$this->log_error( $parsed );
 
@@ -467,9 +471,13 @@ class WXR_Importer extends WP_Importer {
 			}
 		}
 
+		vl( $this );
+		wp_die();
+		
+
 		// Now that we've done the main processing, do any required
 		// post-processing and remapping.
-		$this->post_process();
+		// $this->post_process();
 
 		if ( $this->options['aggressive_url_search'] ) {
 			$this->replace_attachment_urls_in_content();
@@ -723,6 +731,13 @@ class WXR_Importer extends WP_Importer {
 	 * Note that new/updated terms, comments and meta are imported for the last of the above.
 	 */
 	protected function process_post( $data, $meta, $comments, $terms ) {
+
+		// if( 'About' === $data['post_title'] ) {
+		// 	vl( $data );
+		// 	vl( $meta );
+		// 	wp_die();
+		// }
+		
 		/**
 		 * Pre-process post data.
 		 *
@@ -757,7 +772,11 @@ class WXR_Importer extends WP_Importer {
 			return false;
 		}
 
-		$post_exists = $this->post_exists( $data );
+		if( 'About' === $data['post_title'] || 'e-Books' === $data['post_title'] ) {
+			$post_exists = false;
+		} else {
+			$post_exists = $this->post_exists( $data );
+		}
 		if ( $post_exists ) {
 			$this->logger->info( sprintf(
 				__( '%s "%s" already exists.', 'wordpress-importer' ),
@@ -841,6 +860,9 @@ class WXR_Importer extends WP_Importer {
 		}
 
 		$postdata = apply_filters( 'wp_import_post_data_processed', $postdata, $data );
+
+		// Fix: /plugins/wordpress-importer/wordpress-importer.php [line 687]
+		$postdata = wp_slash( $postdata );
 
 		if ( 'attachment' === $postdata['post_type'] ) {
 			if ( ! $this->options['fetch_attachments'] ) {
@@ -1136,6 +1158,13 @@ class WXR_Importer extends WP_Importer {
 			return true;
 		}
 
+		// if( 'About' === $post['post_title'] ) {
+		// 	vl( '------------single-------------' );
+		// 	vl( $meta );
+		// 	vl( $post_id );
+		// 	vl( $post  );
+		// }
+
 		foreach ( $meta as $meta_item ) {
 			/**
 			 * Pre-process post meta data.
@@ -1165,6 +1194,17 @@ class WXR_Importer extends WP_Importer {
 				// export gets meta straight from the DB so could have a serialized string
 				if ( ! $value ) {
 					$value = maybe_unserialize( $meta_item['value'] );
+				}
+
+				if( 'About' === $post['post_title'] ) {
+					if( '_elementor_data' === $meta_item['key'] ) {
+						vl( $value );
+					}
+				}
+				if( 'e-Books' === $post['post_title'] ) {
+					if( '_elementor_data' === $meta_item['key'] ) {
+						vl( $value );
+					}
 				}
 
 				add_post_meta( $post_id, $key, $value );

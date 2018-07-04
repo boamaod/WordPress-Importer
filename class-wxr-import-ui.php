@@ -352,7 +352,7 @@ class WXR_Import_UI {
 	 * @param int $id Media item ID.
 	 * @return WXR_Import_Info|WP_Error Import info instance on success, error otherwise.
 	 */
-	protected function get_data_for_attachment( $id ) {
+	function get_data_for_attachment( $id ) {
 		$existing = get_post_meta( $id, '_wxr_import_info' );
 		if ( ! empty( $existing ) ) {
 			$data = $existing[0];
@@ -761,3 +761,31 @@ class WXR_Import_UI {
 		));
 	}
 }
+
+
+add_action( 'admin_head', function(  ) {
+
+	// $ob = new WXR_Import_UI();
+	// $data = $ob->get_data_for_attachment( 128 );
+
+	$options = array(
+		'fetch_attachments' => false,
+	);
+	$logger = new WP_Importer_Logger_CLI();
+	$importer = new WXR_Importer( $options );
+	$file = get_attached_file( 128 );
+	$importer->set_logger( $logger );
+	$result = $importer->import( $file );
+	echo '<pre>';
+	print_r( $data );
+	print_r( $result );
+	wp_die();
+
+	// $file = get_attached_file( 128 );
+
+	// $importer = $this->get_importer();
+	// $data = $importer->get_preliminary_information( $file );
+	// if ( is_wp_error( $data ) ) {
+	// 	return $data;
+	// }
+} );
